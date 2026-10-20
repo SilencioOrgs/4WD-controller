@@ -3,6 +3,9 @@ import type {ReturnTypeUseRobot} from "@/components/robot-types";
 export function ModePanel({robot:r}:{robot:ReturnTypeUseRobot}) {
  const running=r.status?.mode==="auto"&&r.status.state==="running";
  const done=r.status?.state==="done";
+ const progress=Math.min(100,Math.max(0,100*
+   ((r.status?.direction==="returning" ? (r.status?.returnSegment??0) : (r.status?.cycle??0)) /
+   (r.status?.totalCycles||r.cycles||1))));
  return <section className="zone mode-zone" aria-label="Mode and control status">
    <div className="tabs" role="group" aria-label="Robot mode">
      <button type="button" className={r.view==="manual"?"selected":""}
@@ -37,9 +40,7 @@ export function ModePanel({robot:r}:{robot:ReturnTypeUseRobot}) {
          : "Routine running"}</strong>
        <div className="progress-sub">{r.status?.phase==="release"?"Dispensing seeds":r.status?.phase==="settle"?"Waiting before dispense":r.status?.phase==="gateClose"?"Closing seed gate":r.status?.phase==="returnPause"?"Pause before next reverse":r.status?.phase==="returning"?"Moving backward":r.status?.phase==="drive"?"Moving forward":r.status?.phase==="rakeDown"?"Rake down":r.status?.phase||"Preparing"} · {((r.status?.phaseRemainingMs||0)/1000).toFixed(1)} seconds</div>
        {r.routine==="plant"&&<div className="progress-sub">{r.status?.seedDrops??0} / {r.status?.plannedDrops??r.cycles} seed drops complete</div>}
-       <div className="progress-rail" aria-label="Current cycle progress"><span style={{width:`${Math.min(100,Math.max(0,100*(r.status?.direction==="returning"
-         ? (r.status?.returnSegment||0)/(r.status?.totalCycles||1)
-         : (r.status?.cycle||0)/(r.status?.totalCycles||1)))}%`}}/></div>
+       <div className="progress-rail" aria-label="Current cycle progress"><span style={{width:`${progress}%`}}/></div>
      </div>:done?<div className="live-progress completed" role="status">
        <strong>Done</strong><p>Cycle finished. Gate closed and motors stopped.</p>
        <button className="outlined-button" onClick={r.chooseManual}>Back to manual</button>
