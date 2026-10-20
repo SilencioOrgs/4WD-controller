@@ -1,3 +1,4 @@
+export type SeedSequence = "dispense-first" | "move-first";
 export type PlantConfig = {
   preset: "plant";
   cycles: number;
@@ -6,41 +7,63 @@ export type PlantConfig = {
   settleMs: number;
   releaseMs: number;
   returnPauseMs: number;
+  sequence?: SeedSequence; // missing means legacy move-first
+  useRake?: boolean;
+  rakeLiftMs?: number; // when optional rake lifts during the forward segment
 };
-export type PlantPhase = "drive" | "settle" | "release" | "returning" | "returnPause" | "done";
+export type PlantPhase =
+  "drive" | "settle" | "release" | "rakeDown" | "rakeUp" |
+  "returning" | "returnPause" | "done";
 export type PlantSegment = {
   phase: PlantPhase;
   cycle: number;
   direction: "forward" | "returning";
   durationMs: number;
 };
-function durationOK(n: number, optional=false) {
-  return Number.isSafeInteger(n) && (optional && n === 0 || n >= 100 && n <= 20000);
-}
+const validDuration = (n: number, optional = false) =>
+  Number.isSafeInteger(n) && ((optional && n === 0) || (n >= 100 && n <= 20000));
+
 export function validatePlantConfig(config: PlantConfig): string | null {
   if (!Number.isSafeInteger(config.cycles) || config.cycles < 1 || config.cycles > 50)
-    return "Cycles must be 1–50";
-  if (typeof config.returnToStart !== "boolean") return "Return must be a boolean";
-  if (!durationOK(config.driveMs)) return "Drive time must be 100–20000 ms";
-  if (!durationOK(config.releaseMs)) return "Gate release must be 100–20000 ms";
-  if (!durationOK(config.settleMs, true)) return "Settle must be 0 or 100–20000 ms";
-  if (!durationOK(config.returnPauseMs, true)) return "Return pause must be 0 or 100–20000 ms";
+    return "Forward moves must be between 1 and 50";
+  if (typeof config.returnToStart !== "boolean") return "Return option must be selected";
+  if (!validDuration(config.driveMs)) return "Drive duration must be 100–20000 ms";
+  if (!validDuration(config.releaseMs)) return "Seed gate must remain open for 100–20000 ms";
+  if (!validDuration(config.settleMs, true)) return "Waiting duration must be 0 or 100–20000 ms";
+  if (!validDuration(config.returnPauseMs, true)) return "Return pause must be 0 or 100–20000 ms";
+  if (config.sequence !== undefined && config.sequence !== "move-first" && config.sequence !== "dispense-first")
+    return "Invalid dispensing sequence";
+  if (config.useRake !== undefined && typeof config.useRake !== "boolean")
+    return "Rake must be enabled or disabled";
+  if (config.useRake && (!validDuration(config.rakeLiftMs ?? 1000) || (config.rakeLiftMs ?? 1000) > config.driveMs))
+    return "Rake lift time must fit within one forward move";
   return null;
 }
+
 export function buildPlantPlan(config: PlantConfig): PlantSegment[] {
-  const issue=validatePlantConfig(config);
-  if(issue) throw new Error(issue);
-  const result: PlantSegment[] = [];
-  for(let cycle=1; cycle<=config.cycles; cycle++) {
-    result.push({phase:"drive",cycle,direction:"forward",durationMs:config.driveMs});
-    if(config.settleMs>0) result.push({phase:"settle",cycle,direction:"forward",durationMs:config.settleMs});
-    result.push({phase:"release",cycle,direction:"forward",durationMs:config.releaseMs});
+  const issue = validatePlantConfig(config);
+  if (issue) throw new Error(issue);
+  const sequence = config.sequence ?? "move-first";
+  const rake = config.useRake === true;
+  const plan: PlantSegment[] = [];
+  const add = (phase: PlantPhase, cycle: number, durationMs: number, direction: "forward" | "returning" = "forward") =>
+    plan.push({ phase, cycle, durationMs, direction });
+
+  if (sequence === "dispense-first") add("release", 0, config.releaseMs);
+  for (let cycle = 1; cycle <= config.cycles; cycle++) {
+    if (rake) add("rakeDown", cycle, 150);
+    add("drive", cycle, config.driveMs);
+    if (rake) add("rakeUp", cycle, 0); // marker: lift occurs DURING the drive, at rakeLiftMs
+    if (config.settleMs > 0) add("settle", cycle, config.settleMs);
+    add("release", cycle, config.releaseMs);
   }
-  if(config.returnToStart) for(let i=1;i<=config.cycles;i++) {
-    result.push({phase:"returning",cycle:i,direction:"returning",durationMs:config.driveMs});
-    if(i<config.cycles && config.returnPauseMs>0)
-      result.push({phase:"returnPause",cycle:i,direction:"returning",durationMs:config.returnPauseMs});
+  if (config.returnToStart) {
+    for (let segment = 1; segment <= config.cycles; segment++) {
+      add("returning", segment, config.driveMs, "returning");
+      if (segment < config.cycles && config.returnPauseMs > 0)
+        add("returnPause", segment, config.returnPauseMs, "returning");
+    }
   }
-  result.push({phase:"done",cycle:config.cycles,direction:config.returnToStart?"returning":"forward",durationMs:0});
-  return result;
+  add("done", config.cycles, 0, config.returnToStart ? "returning" : "forward");
+  return plan;
 }
