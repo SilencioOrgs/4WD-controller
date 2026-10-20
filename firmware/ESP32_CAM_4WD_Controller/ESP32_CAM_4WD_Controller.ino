@@ -127,9 +127,16 @@ String modeName() {
     default: return "manual";
   }
 }
-void respondOK() { server.send(200, "text/plain", "OK"); }
+void addCorsHeaders() {
+  // Capacitor uses https://localhost; Android WebView otherwise rejects
+  // GET requests to the local ESP32 Wi-Fi access point.
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Cache-Control", "no-store");
+}
+void respondOK() { addCorsHeaders(); server.send(200, "text/plain", "OK"); }
 void registerDrive(const char* endpoint) {
   server.on(String("/") + endpoint, HTTP_GET, [endpoint]() {
+    addCorsHeaders();
     if (!motorReady) { server.send(503, "text/plain", "Motor PWM unavailable"); return; }
     if (mode != Mode::Manual) { server.send(409, "text/plain", "Switch to manual"); return; }
     lastMove = millis();
@@ -184,7 +191,8 @@ void initServos() {
 }
 void configureRoutes() {
   server.on("/status", HTTP_GET, []() {
-    String result = "{\"ready\":";
+    addCorsHeaders();
+    String result = "{\"device\":\"LAFVIN-4WD\",\"ready\":";
     result += motorReady ? "true" : "false";
     result += ",\"mode\":\"" + modeName() + "\"";
     result += ",\"motion\":\"" + motion + "\"";
@@ -193,8 +201,12 @@ void configureRoutes() {
     result += mode == Mode::Manual ? 0 : (int)max(0L, (long)PERIOD_MS - (long)(millis() - phaseStart));
     result += ",\"servoEnabled\":";
     result += servoReady ? "true" : "false";
+    result += ",\"preset\":";
+    if (mode == Mode::Plant) result += "\"plant\"";
+    else if (mode == Mode::Cruise) result += "\"cruise\"";
+    else if (mode == Mode::Pulse) result += "\"pulse\"";
+    else result += "null";
     result += "}";
-    server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", result);
   });
   registerDrive("go");
@@ -207,6 +219,7 @@ void configureRoutes() {
     respondOK();
   });
   server.on("/auto", HTTP_GET, []() {
+    addCorsHeaders();
     if (!motorReady) { server.send(503, "text/plain", "Motor PWM unavailable"); return; }
     const String requested = server.arg("mode");
     if (requested == "plant") enterAuto(Mode::Plant);
@@ -216,6 +229,7 @@ void configureRoutes() {
     respondOK();
   });
   server.on("/servo", HTTP_GET, []() {
+    addCorsHeaders();
     if (mode != Mode::Manual) { server.send(409, "text/plain", "Switch to manual"); return; }
     const int channel = server.arg("channel").toInt();
     const String position = server.arg("gate");
@@ -226,12 +240,13 @@ void configureRoutes() {
     respondOK();
   });
   // Older page compatibility. Disabled camera endpoints are intentional.
-  server.on("/ledon", HTTP_GET, []() { server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
-  server.on("/ledoff", HTTP_GET, []() { server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
+  server.on("/ledon", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
+  server.on("/ledoff", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
   server.on("/", HTTP_GET, []() {
+    addCorsHeaders();
     server.send(200, "text/plain", "4WD FIELD UNIT online. Connect using the Flutter controller. /status");
   });
-  server.onNotFound([]() { server.send(404, "text/plain", "Unknown command"); });
+  server.onNotFound([]() { addCorsHeaders(); server.send(404, "text/plain", "Unknown command"); });
 }
 void setup() {
   Serial.begin(115200);
