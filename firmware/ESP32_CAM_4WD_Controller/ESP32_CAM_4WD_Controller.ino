@@ -98,12 +98,20 @@ void runAuto(uint32_t now) {
   uint32_t elapsed = now - phaseStart;
   if (elapsed >= PERIOD_MS) {
     phaseStart = now;
-    if (mode == Mode::Cruise) phase = "drive";
-    else phase = phase == "drive" ? "release" : "drive";
+    phase = phase == "drive" ? "release" : "drive";
   }
-  if (phase == "drive") {
+  if (mode == Mode::Cruise) {
+    // Continuous forward driving; toggle gate on three-second phases.
+    gate(phase == "release");
+    drive("go");
+  } else if (mode == Mode::Pulse) {
+    // Motor pulse test: three seconds forward then three seconds stopped.
     gate(false);
-    // Short servo settling interval before wheels start.
+    if (phase == "drive") drive("go");
+    else stopMotor();
+  } else if (phase == "drive") {
+    // Plant cycle: gate closed and forward for 3 s; pause before advancing.
+    gate(false);
     if ((uint32_t)(now - phaseStart) >= 250) drive("go");
     else stopMotor();
   } else {
