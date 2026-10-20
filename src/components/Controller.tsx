@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { RobotApi } from "@/lib/robot-api";
+import { DriveSession } from "@/lib/drive-session";
+import { assessLink, type LinkHealth } from "@/lib/control-logic";
 import { tapFeedback } from "@/lib/haptics";
 import {
   PRESETS, ROBOT_SSID, type Direction, type Mode, type Preset, type RobotStatus
@@ -68,6 +70,8 @@ function FaceKey({ label, hint, disabled, onClick, tone }: {
 
 export default function Controller() {
   const [connected, setConnected] = useState(false);
+  const [linkHealth, setLinkHealth] = useState<LinkHealth>("offline");
+  const [powerWarning, setPowerWarning] = useState(false);
   const [robotStatus, setRobotStatus] = useState<RobotStatus | null>(null);
   const [mode, setMode] = useState<Mode>("manual");
   const [preset, setPreset] = useState<Preset>("plant");
@@ -81,9 +85,10 @@ export default function Controller() {
   const aliveRef = useRef(false);
   const modeRef = useRef<Mode>("manual");
   const heldRef = useRef<Direction | null>(null);
-  const sendingRef = useRef<Promise<unknown> | null>(null);
-  const driveLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const driveRef = useRef<DriveSession | null>(null);
   const checkingRef = useRef(false);
+  const failedRequestsRef = useRef(0);
+  const lastUptimeRef = useRef<number | null>(null);
 
   const setCurrentMode = useCallback((value: Mode) => {
     modeRef.current = value;
@@ -93,45 +98,55 @@ export default function Controller() {
   const markDisconnected = useCallback(() => {
     if (!aliveRef.current) return;
     setConnected(false);
+    setLinkHealth("offline");
     setRobotStatus(null);
     setCurrentMode("manual");
     heldRef.current = null;
     setHeldDirection(null);
-    if (driveLoopRef.current) clearInterval(driveLoopRef.current);
-    driveLoopRef.current = null;
+    driveRef.current?.release();
   }, [setCurrentMode]);
 
+  const noteRequestFailure = useCallback(() => {
+    if (!aliveRef.current) return;
+    failedRequestsRef.current++;
+    const health = assessLink(failedRequestsRef.current);
+    setLinkHealth(health);
+    if (health === "offline") markDisconnected();
+  }, [markDisconnected]);
+
   const syncStatus = useCallback(async () => {
-    if (checkingRef.current) return;
+    // Avoid competing with realtime D-pad commands on ESP32's single HTTP loop.
+    if (checkingRef.current || heldRef.current) return;
     checkingRef.current = true;
     try {
       const next = await api.status();
       if (!aliveRef.current) return;
+      failedRequestsRef.current = 0;
+      setLinkHealth("connected");
       setLastChecked(new Date());
+      if (lastUptimeRef.current !== null && next.uptimeMs + 1000 < lastUptimeRef.current) {
+        setPowerWarning(true);
+      }
+      if (next.resetReason === "BROWNOUT") setPowerWarning(true);
+      lastUptimeRef.current = next.uptimeMs;
       setRobotStatus(next);
       setConnected(next.ready);
       setCurrentMode(next.mode);
       if (next.preset) setPreset(next.preset);
       if (!next.ready) markDisconnected();
     } catch {
-      markDisconnected();
+      noteRequestFailure();
     } finally {
       checkingRef.current = false;
     }
-  }, [markDisconnected, setCurrentMode]);
+  }, [markDisconnected, noteRequestFailure, setCurrentMode]);
 
   const releaseHold = useCallback(() => {
-    if (driveLoopRef.current) clearInterval(driveLoopRef.current);
-    driveLoopRef.current = null;
     if (!heldRef.current) return;
     heldRef.current = null;
     if (aliveRef.current) setHeldDirection(null);
-    // Ensure a late drive packet cannot overtake the final stop request.
-    const outstanding = sendingRef.current;
-    void Promise.resolve(outstanding).catch(() => {}).then(() => api.stop()).catch(() => {
-      markDisconnected();
-    });
-  }, [markDisconnected]);
+    driveRef.current?.release();
+  }, []);
 
   const emergencyStop = useCallback(async () => {
     releaseHold();
@@ -140,8 +155,24 @@ export default function Controller() {
     try {
       await api.stop();
       await syncStatus();
-    } catch { markDisconnected(); }
-  }, [hapticsEnabled, markDisconnected, releaseHold, setCurrentMode, syncStatus]);
+    } catch { noteRequestFailure(); }
+  }, [hapticsEnabled, noteRequestFailure, releaseHold, setCurrentMode, syncStatus]);
+
+  useEffect(() => {
+    driveRef.current = new DriveSession(
+      command => command === "stop" ? api.stop() : api.drive(command),
+      () => {
+        if (!aliveRef.current) return;
+        heldRef.current = null;
+        setHeldDirection(null);
+        noteRequestFailure();
+      }
+    );
+    return () => {
+      driveRef.current?.dispose();
+      driveRef.current = null;
+    };
+  }, [noteRequestFailure]);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -154,7 +185,7 @@ export default function Controller() {
     const poll = setInterval(() => void syncStatus(), 1800);
     const heartbeat = setInterval(() => {
       if (modeRef.current === "auto") {
-        void api.heartbeat().catch(markDisconnected);
+        void api.heartbeat().catch(noteRequestFailure);
       }
     }, 350);
     const stopWhenHidden = () => {
@@ -186,37 +217,27 @@ export default function Controller() {
       removeNative?.();
       clearInterval(poll);
       clearInterval(heartbeat);
-      if (driveLoopRef.current) clearInterval(driveLoopRef.current);
+      driveRef.current?.release();
       document.removeEventListener("visibilitychange", stopWhenHidden);
       window.removeEventListener("blur", stopWhenBlurred);
       void api.stop().catch(() => {});
     };
-  }, [markDisconnected, releaseHold, setCurrentMode, syncStatus]);
-
-  function sendHeldDrive() {
-    const direction = heldRef.current;
-    if (!direction || sendingRef.current) return;
-    const task = api.drive(direction);
-    sendingRef.current = task;
-    void task.catch(markDisconnected).finally(() => {
-      if (sendingRef.current === task) sendingRef.current = null;
-    });
-  }
+  }, [noteRequestFailure, releaseHold, setCurrentMode, syncStatus]);
 
   function pressDrive(direction: Direction) {
     if (!connected || modeRef.current !== "manual" || settingsOpen) return;
     if (heldRef.current === direction) return;
-    releaseHold();
     heldRef.current = direction;
     setHeldDirection(direction);
     void tapFeedback(hapticsEnabled);
-    sendHeldDrive();
-    driveLoopRef.current = setInterval(sendHeldDrive, 240);
+    // Immediate request on touch-down; serialize retries while held.
+    driveRef.current?.press(direction);
   }
 
   async function startAutopilot(nextPreset: Preset) {
     if (!connected || transitioning) return;
     releaseHold();
+    await driveRef.current?.whenSettled();
     setTransitioning(true);
     void tapFeedback(hapticsEnabled);
     try {
@@ -225,7 +246,7 @@ export default function Controller() {
       setCurrentMode("auto");
       await api.heartbeat();
       await syncStatus();
-    } catch { markDisconnected(); }
+    } catch { noteRequestFailure(); }
     finally { if (aliveRef.current) setTransitioning(false); }
   }
 
@@ -237,14 +258,14 @@ export default function Controller() {
     try {
       await api.stop();
       await syncStatus();
-    } catch { markDisconnected(); }
+    } catch { noteRequestFailure(); }
   }
 
   async function moveGate(channel: 1 | 2, position: "open" | "close") {
     if (!connected || mode !== "manual" || settingsOpen) return;
     void tapFeedback(hapticsEnabled);
     try { await api.gate(channel, position); }
-    catch { markDisconnected(); }
+    catch { noteRequestFailure(); }
   }
 
   function toggleHaptics() {
@@ -275,7 +296,7 @@ export default function Controller() {
       <header className="device-header">
         <div className="brand-mark"><Cpu size={16} strokeWidth={1.8} /> <span>4WD <b>/ FIELD UNIT</b></span></div>
         <div className="device-serial">SERIES 01 <span>—</span> REMOTE SYSTEM</div>
-        <button className="header-settings" onClick={() => setSettingsOpen(true)}
+        <button className="header-settings" onClick={() => { releaseHold(); setSettingsOpen(true); }}
           aria-label="Open settings" title="Settings"><Settings2 size={19} /></button>
       </header>
 
@@ -296,9 +317,9 @@ export default function Controller() {
           <div className="display-inner">
             <div className="display-topbar">
               <div className="display-id"><Radio size={13} /> UNIT_01 <span>/</span> LOCAL LINK</div>
-              <div className={`connection-pill ${connected ? "link-online" : "link-offline"}`}>
+              <div className={`connection-pill ${connected ? (linkHealth === "unstable" ? "link-unstable" : "link-online") : "link-offline"}`}>
                 <span className="connection-dot" />
-                {connected ? "CONNECTED" : "OFFLINE"}
+                {connected ? (linkHealth === "unstable" ? "SIGNAL DELAY" : "CONNECTED") : "OFFLINE"}
               </div>
             </div>
 
@@ -335,7 +356,8 @@ export default function Controller() {
                 {mode === "manual" ? <div className="manual-info">
                   <span className="eyebrow">DIRECT DRIVE / CHANNEL 01</span>
                   <h2>Manual control</h2>
-                  <p>The directional pad responds while held. A / B control the dispensing gate.</p>
+                  <p>Press and hold a direction to drive. Release to stop. A / B control the gate.</p>
+                  {powerWarning && <div className="reset-alert" role="status">ESP32 restart detected. Check 5V supply and common ground.</div>}
                   <div className="motion-state">
                     <span>DRIVE STATUS</span>
                     <strong><span className="motion-signal" /> {heldDirection ? heldDirection.toUpperCase() : "STANDBY"}</strong>
@@ -369,7 +391,7 @@ export default function Controller() {
             </div>}
 
             <footer className="display-statusbar">
-              <span><span className={`status-indicator ${connected ? "online" : ""}`} /> SYSTEM {connected ? "READY" : "WAITING"}</span>
+              <span><span className={`status-indicator ${connected ? "online" : ""}`} /> SYSTEM {connected ? (linkHealth === "unstable" ? "SIGNAL DELAY" : "READY") : "WAITING"}</span>
               <span>192.168.4.1</span>
             </footer>
           </div>
