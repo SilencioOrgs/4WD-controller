@@ -17,7 +17,8 @@ test("fullscreen responsive interface uses large touch targets and no PSP shell"
   assert.match(css, /\.control-layout\s*\{/);
   assert.match(css, /min-height:\s*100dvh/);
   assert.match(css, /touch-action:\s*none/);
-  assert.match(controller, /aria-label="Forward/);
+  assert.match(controller, /label: "Forward"/);
+  assert.match(controller, /aria-label=\{\`\$\{label\}/);
   assert.doesNotMatch(controller, /className="handheld"/);
 });
 
