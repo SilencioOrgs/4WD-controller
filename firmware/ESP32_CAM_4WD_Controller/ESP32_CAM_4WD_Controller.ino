@@ -70,6 +70,7 @@ uint8_t cycleNumber = 0;
 uint8_t returnSegment = 0;
 uint8_t seedDrops = 0;
 static const uint32_t RAKE_LOWER_WAIT_MS = 150;
+static const uint32_t GATE_CLOSE_WAIT_MS = 220; // Allow MG90S gate to reach closed position before wheels move.
 // Adjust only after servo 2 has its own safe signal output and mechanical calibration.
 static const int RAKE_UP_DEGREES = 0;
 static const int RAKE_DOWN_DEGREES = 90;
@@ -92,6 +93,7 @@ uint32_t phaseLimit() {
   if (phase == "release") return planting.releaseMs;
   if (phase == "returnPause") return planting.returnPauseMs;
   if (phase == "rakeDown") return RAKE_LOWER_WAIT_MS;
+  if (phase == "gateClose") return GATE_CLOSE_WAIT_MS;
   return 0;
 }
 void nextPlantPhase(const String &next, uint32_t now) {
@@ -208,7 +210,12 @@ void runAuto(uint32_t now) {
       if (elapsed >= planting.releaseMs) {
         gate(false);
         seedDrops++;
-        // Initial drop is at position 0 and does not count as a forward move.
+        nextPlantPhase("gateClose", now);
+      }
+    } else if (phase == "gateClose") {
+      stopMotor(); gate(false);
+      if (elapsed >= GATE_CLOSE_WAIT_MS) {
+        // Initial drop is position 0. Count only the forward moves.
         if (planting.dispenseFirst && cycleNumber == 0) {
           cycleNumber = 1;
           nextPlantPhase(planting.useRake ? "rakeDown" : "drive", now);
