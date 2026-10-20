@@ -14,10 +14,13 @@
 #include <WebServer.h>
 #include "driver/ledc.h"
 #include "esp_system.h"
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>
 
 static const char* AP_SSID = "ESP32-CAM Robot";
 static const char* AP_PASS = "robotcontrol"; // change before first deployment
 static const uint32_t MOTION_TIMEOUT_MS = 700;
+static const uint32_t WS_MOTION_TIMEOUT_MS = 350;
 static const uint32_t AUTO_TIMEOUT_MS = 1400;
 static const uint32_t PERIOD_MS = 3000;
 static const uint8_t MOTOR_PWM = 150;
@@ -34,6 +37,11 @@ static const int SERVO_OPEN_DEGREES = 0;
 static const int SERVO_CLOSED_DEGREES = 90;
 
 WebServer server(80);
+WebSocketsServer webSocket(81);
+uint8_t controllerClient = 255;
+bool wsDriving = false;
+uint32_t lastStatusPush = 0;
+String lastStateKey = "";
 String resetCause = "UNKNOWN";
 enum class Mode { Manual, Plant, Cruise, Pulse };
 Mode mode = Mode::Manual;
@@ -83,6 +91,7 @@ void gate(bool open, int index = 0) {
 }
 void enterManual() {
   mode = Mode::Manual;
+  wsDriving = false;
   stopMotor();
   phase = "idle";
 }
@@ -145,6 +154,7 @@ void registerDrive(const char* endpoint) {
     if (!motorReady) { server.send(503, "text/plain", "Motor PWM unavailable"); return; }
     if (mode != Mode::Manual) { server.send(409, "text/plain", "Switch to manual"); return; }
     lastMove = millis();
+    wsDriving = false;
     drive(String(endpoint));
     respondOK();
   });
@@ -211,29 +221,39 @@ String resetCauseName() {
     default: return "OTHER";
   }
 }
+String statusJSON() {
+  String result = "{\"device\":\"LAFVIN-4WD\",\"ready\":";
+  result += motorReady ? "true" : "false";
+  result += ",\"mode\":\"" + modeName() + "\"";
+  result += ",\"motion\":\"" + motion + "\"";
+  result += ",\"phase\":\"" + phase + "\"";
+  result += ",\"phaseRemainingMs\":";
+  result += mode == Mode::Manual ? 0 : (int)max(0L, (long)PERIOD_MS - (long)(millis() - phaseStart));
+  result += ",\"servoEnabled\":";
+  result += servoReady ? "true" : "false";
+  result += ",\"servo2Enabled\":";
+  result += ENABLE_SERVO_2 ? "true" : "false";
+  result += ",\"uptimeMs\":" + String(millis());
+  result += ",\"resetReason\":\"" + resetCause + "\"";
+  result += ",\"preset\":";
+  if (mode == Mode::Plant) result += "\"plant\"";
+  else if (mode == Mode::Cruise) result += "\"cruise\"";
+  else if (mode == Mode::Pulse) result += "\"pulse\"";
+  else result += "null";
+  result += "}";
+  return result;
+}
+String currentStateKey() {
+  return modeName() + "|" + motion + "|" + phase;
+}
+void sendStatus() {
+  if (controllerClient != 255) webSocket.sendTXT(controllerClient, "T:" + statusJSON());
+}
 void configureRoutes() {
   server.on("/status", HTTP_GET, []() {
     addCorsHeaders();
-    String result = "{\"device\":\"LAFVIN-4WD\",\"ready\":";
-    result += motorReady ? "true" : "false";
-    result += ",\"mode\":\"" + modeName() + "\"";
-    result += ",\"motion\":\"" + motion + "\"";
-    result += ",\"phase\":\"" + phase + "\"";
-    result += ",\"phaseRemainingMs\":";
-    result += mode == Mode::Manual ? 0 : (int)max(0L, (long)PERIOD_MS - (long)(millis() - phaseStart));
-    result += ",\"servoEnabled\":";
-    result += servoReady ? "true" : "false";
-    result += ",\"servo2Enabled\":";
-    result += ENABLE_SERVO_2 ? "true" : "false";
-    result += ",\"uptimeMs\":" + String(millis());
-    result += ",\"resetReason\":\"" + resetCause + "\"";
-    result += ",\"preset\":";
-    if (mode == Mode::Plant) result += "\"plant\"";
-    else if (mode == Mode::Cruise) result += "\"cruise\"";
-    else if (mode == Mode::Pulse) result += "\"pulse\"";
-    else result += "null";
-    result += "}";
-    server.send(200, "application/json", result);
+    server.client().setNoDelay(true);
+    server.send(200, "application/json", statusJSON());
   });
   registerDrive("go");
   registerDrive("back");
@@ -277,22 +297,93 @@ void configureRoutes() {
   });
   server.onNotFound([]() { addCorsHeaders(); server.send(404, "text/plain", "Unknown command"); });
 }
+void handleWs(uint8_t num, WStype_t event, uint8_t *data, size_t length) {
+  if (event == WStype_CONNECTED) {
+    if (controllerClient != 255 && controllerClient != num) {
+      enterManual();
+      webSocket.disconnect(controllerClient);
+    }
+    controllerClient = num;
+    enterManual(); // never resume motion on reconnect
+    sendStatus();
+    return;
+  }
+  if (event == WStype_DISCONNECTED) {
+    if (num == controllerClient) {
+      enterManual();
+      controllerClient = 255;
+    }
+    return;
+  }
+  if (event != WStype_TEXT || num != controllerClient || length == 0 || length > 480) return;
+  String frame;
+  frame.reserve(length);
+  for (size_t i=0; i<length; ++i) frame += (char)data[i];
+  if (frame.startsWith("D:")) {
+    String tail = frame.substring(2);
+    const int colon = tail.indexOf(':');
+    String seq = colon >= 0 ? tail.substring(colon+1) : "";
+    String direction = colon >= 0 ? tail.substring(0,colon) : tail;
+    if (mode == Mode::Manual && motorReady &&
+        (direction == "go" || direction == "back" || direction == "left" || direction == "right")) {
+      wsDriving = true;
+      lastMove = millis();
+      drive(direction);
+      if (seq.length()) webSocket.sendTXT(num,"ACK:"+seq);
+    } else webSocket.sendTXT(num, "E:Invalid drive command");
+  } else if (frame == "S" || frame.startsWith("S:")) {
+    enterManual();
+    if (frame.startsWith("S:")) webSocket.sendTXT(num,"ACK:"+frame.substring(2));
+  } else if (frame == "H") {
+    lastHeartbeat = millis();
+  } else if (frame.startsWith("G:")) {
+    const int channel = frame.substring(2,3).toInt();
+    const String pos = frame.substring(4);
+    if (mode == Mode::Manual && (channel == 1 || (channel == 2 && ENABLE_SERVO_2)) &&
+       (pos=="open" || pos=="close")) gate(pos=="open",channel-1);
+    else webSocket.sendTXT(num,"E:Servo unavailable");
+  } else if (frame.startsWith("A:")) {
+    JsonDocument doc;
+    const auto err=deserializeJson(doc, frame.substring(2));
+    if (err) { webSocket.sendTXT(num,"E:Invalid JSON"); return; }
+    String preset=doc["preset"] | "";
+    if (preset=="cruise") enterAuto(Mode::Cruise);
+    else if (preset=="pulse") enterAuto(Mode::Pulse);
+    else if (preset=="plant") enterAuto(Mode::Plant);
+    else { webSocket.sendTXT(num,"E:Unknown preset"); return; }
+  } else if (frame=="Q" || frame.startsWith("Q:")) {
+    if(frame.startsWith("Q:")) webSocket.sendTXT(num,"ACK:"+frame.substring(2));
+  }
+  sendStatus();
+}
 void setup() {
   Serial.begin(115200);
   resetCause = resetCauseName();
-  Serial.printf("[BOOT] reason=%s\\n", resetCause.c_str());
+  Serial.printf("[BOOT] reason=%s\n", resetCause.c_str());
   initMotors();
   initServos();
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASS);
+  WiFi.setSleep(false);
+  WiFi.softAP(AP_SSID, AP_PASS, 1, 0, 2);
   configureRoutes();
   server.begin();
+  webSocket.begin();
+  webSocket.onEvent(handleWs);
   Serial.printf("Robot AP: %s  IP: %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 void loop() {
+  webSocket.loop();
   server.handleClient();
   uint32_t now = millis();
   if (mode != Mode::Manual) runAuto(now);
-  else if (motion != "stop" && (uint32_t)(now - lastMove) > MOTION_TIMEOUT_MS) stopMotor();
-  delay(5);
+  else if (motion != "stop" && (uint32_t)(now - lastMove) > (wsDriving ? WS_MOTION_TIMEOUT_MS : MOTION_TIMEOUT_MS)) stopMotor();
+  if (controllerClient != 255) {
+    const String state = currentStateKey();
+    if (state != lastStateKey || (uint32_t)(now-lastStatusPush)>=500) {
+      lastStatusPush=now;
+      lastStateKey=state;
+      sendStatus();
+    }
+  }
+  delay(1);
 }
