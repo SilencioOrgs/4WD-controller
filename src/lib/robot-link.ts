@@ -29,20 +29,32 @@ export interface RobotLink {
 
 export class HttpTransport {
   private driveAbort: AbortController | null = null;
+  private pendingDrive: Promise<unknown> | null = null;
+  private currentDirection: Direction | null = null;
   readonly api: RobotApi;
   constructor(api = new RobotApi()) { this.api = api; }
   status() { return this.api.status(); }
   drive(dir: Direction) {
+    if (this.pendingDrive && this.currentDirection === dir) return this.pendingDrive;
+    // A direction switch invalidates any stale HTTP request, without blocking
+    // the new direction behind its 900ms fetch timeout.
     this.driveAbort?.abort();
     const ctrl = new AbortController();
     this.driveAbort = ctrl;
-    return this.api.drive(dir, ctrl.signal).finally(() => {
-      if (this.driveAbort === ctrl) this.driveAbort = null;
+    this.currentDirection = dir;
+    const task = this.api.drive(dir, ctrl.signal).finally(() => {
+      if (this.driveAbort === ctrl) {
+        this.driveAbort = null; this.pendingDrive = null; this.currentDirection = null;
+      }
     });
+    this.pendingDrive = task;
+    return task;
   }
   stop() {
     this.driveAbort?.abort();
     this.driveAbort = null;
+    this.pendingDrive = null;
+    this.currentDirection = null;
     return this.api.stop();
   }
   heartbeat() { return this.api.heartbeat(); }
@@ -52,7 +64,7 @@ export class HttpTransport {
   startAutopilot(config: PlantConfig | { preset: "cruise" | "pulse" }) {
     return this.api.autopilot(config);
   }
-  close() { this.driveAbort?.abort(); }
+  close() { this.driveAbort?.abort(); this.pendingDrive=null; this.driveAbort=null; }
 }
 
 export class WsTransport {

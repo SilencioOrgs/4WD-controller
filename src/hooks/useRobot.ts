@@ -38,7 +38,8 @@ export function useRobot() {
   const configurationError=validatePlantConfig(configuration);
   const connected=health.connected && status?.ready===true;
 
-  const release=useCallback(()=>{
+  const release=useCallback((direction?:Direction)=>{
+    if(direction && heldRef.current!==direction)return;
     if(!heldRef.current)return;
     heldRef.current=null; setHeld(null);
     driveRef.current?.release();
