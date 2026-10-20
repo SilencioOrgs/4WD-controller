@@ -53,6 +53,7 @@ uint32_t lastMove = 0;
 uint32_t lastHeartbeat = 0;
 uint32_t phaseStart = 0;
 void gate(bool open, int index=0);
+void rake(bool down);
 struct PlantTiming {
   uint8_t cycles = 5;
   bool returnToStart = false;

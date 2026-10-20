@@ -28,13 +28,22 @@ export function ModePanel({robot:r}:{robot:ReturnTypeUseRobot}) {
          onClick={()=>r.setRoutine(p)}>{p==="cruise"?"Cruise":"Pulse drive"}</button>)}
      </div>}
      {running?<div className="live-progress" role="status">
-       <strong>{r.routine==="plant"?`Cycle ${r.status?.cycle||1} / ${r.status?.totalCycles||r.cycles}`:"Routine running"}</strong>
-       <div className="progress-sub">{r.status?.direction==="returning"?"Returning":"Forward"} · {r.status?.phase} · {((r.status?.phaseRemainingMs||0)/1000).toFixed(1)} s</div>
-       <div className="progress-rail" aria-label="Current cycle progress"><span style={{width:`${Math.min(100,Math.max(0,100*((r.status?.cycle||1)-1)/(r.status?.totalCycles||1)))}%`}}/></div>
+       <strong>{r.routine==="plant"
+         ? r.status?.direction==="returning"
+           ? `Going back — reverse move ${r.status?.returnSegment||1} of ${r.status?.totalCycles||r.cycles}`
+           : r.status?.cycle===0
+             ? "Dispensing at starting point"
+             : `Forward move ${r.status?.cycle||1} of ${r.status?.totalCycles||r.cycles}`
+         : "Routine running"}</strong>
+       <div className="progress-sub">{r.status?.phase==="release"?"Dispensing seeds":r.status?.phase==="settle"?"Waiting before dispense":r.status?.phase==="returnPause"?"Pause before next reverse":r.status?.phase==="returning"?"Moving backward":r.status?.phase==="drive"?"Moving forward":r.status?.phase==="rakeDown"?"Rake down":r.status?.phase||"Preparing"} · {((r.status?.phaseRemainingMs||0)/1000).toFixed(1)} seconds</div>
+       {r.routine==="plant"&&<div className="progress-sub">{r.status?.seedDrops??0} / {r.status?.plannedDrops??r.cycles} seed drops complete</div>}
+       <div className="progress-rail" aria-label="Current cycle progress"><span style={{width:`${Math.min(100,Math.max(0,100*(r.status?.direction==="returning"
+         ? (r.status?.returnSegment||0)/(r.status?.totalCycles||1)
+         : (r.status?.cycle||0)/(r.status?.totalCycles||1)))}%`}}/></div>
      </div>:done?<div className="live-progress completed" role="status">
        <strong>Done</strong><p>Cycle finished. Gate closed and motors stopped.</p>
        <button className="outlined-button" onClick={r.chooseManual}>Back to manual</button>
-     </div>:<p className="routine-hint">{r.routine==="plant"?"Set plant timing, cycles, and finish behavior on the right.":"Select the utility routine, then start."}</p>}
+     </div>:<p className="routine-hint">{r.routine==="plant"?"Choose when to dispense, how many times to move, and whether to go back. Then press Start.":"Select the utility routine, then start."}</p>}
      {r.error&&<p role="alert" className="error-copy">{r.error}</p>}
      <button className="primary-action" onClick={()=>void r.run()} disabled={!r.connected||r.runningCommand||!!r.configurationError&&r.routine==="plant"}>
        {done?<RotateCcw size={17}/>:<Play size={17}/>}

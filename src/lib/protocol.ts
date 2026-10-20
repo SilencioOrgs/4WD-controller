@@ -19,6 +19,11 @@ export type RobotStatus = {
   resetReason: string;
   servo2Enabled: boolean;
   cycle: number;
+  returnSegment: number;
+  seedDrops: number;
+  plannedDrops: number;
+  sequence: "dispense-first" | "move-first";
+  rakeEnabled: boolean;
   totalCycles: number;
   direction: "forward" | "returning";
   returnToStart: boolean;
@@ -56,6 +61,11 @@ export function parseRobotStatus(data: unknown): RobotStatus {
     servoEnabled: value.servoEnabled === true,
     servo2Enabled: value.servo2Enabled === true,
     cycle: typeof value.cycle === "number" ? value.cycle : 0,
+    returnSegment: typeof value.returnSegment === "number" ? value.returnSegment : 0,
+    seedDrops: typeof value.seedDrops === "number" ? value.seedDrops : 0,
+    plannedDrops: typeof value.plannedDrops === "number" ? value.plannedDrops : 0,
+    sequence: value.sequence === "dispense-first" ? "dispense-first" : "move-first",
+    rakeEnabled: value.rakeEnabled === true,
     totalCycles: typeof value.totalCycles === "number" ? value.totalCycles : 0,
     direction: value.direction === "returning" ? "returning" : "forward",
     returnToStart: value.returnToStart === true,
