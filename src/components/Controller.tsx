@@ -5,12 +5,12 @@ import { Activity, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CircleStop,
   Gauge, Pause, Play, RefreshCw, Settings2, Signal, Vibrate, WifiOff, X } from "lucide-react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { DriveSession } from "@/lib/drive-session";
-import { assessLink, type LinkHealth } from "@/lib/control-logic";
-import { RobotApi } from "@/lib/robot-api";
+
+import { HybridRobotLink, type LinkHealth as TransportHealth } from "@/lib/robot-link";
 import { tapFeedback } from "@/lib/haptics";
 import { PRESETS, ROBOT_SSID, type Direction, type Mode, type Preset, type RobotStatus } from "@/lib/protocol";
 
-const api = new RobotApi();
+
 const driveKeys: { direction: Direction; label: string; Icon: typeof ArrowUp }[] = [
   { direction: "go", label: "Forward", Icon: ArrowUp },
   { direction: "left", label: "Left", Icon: ArrowLeft },
@@ -63,7 +63,7 @@ function ServoButton({ label, action, disabled, onPress }: {
 
 export default function Controller() {
   const [connected, setConnected] = useState(false);
-  const [linkHealth, setLinkHealth] = useState<LinkHealth>("offline");
+  const [linkHealth, setLinkHealth] = useState<TransportHealth>({ connected:false, transport:"http", failures:0, lastRttMs:null, avgRttMs:null });
   const [robotStatus, setRobotStatus] = useState<RobotStatus | null>(null);
   const [mode, setMode] = useState<Mode>("manual");
   const [view, setView] = useState<Mode>("manual");
@@ -72,192 +72,144 @@ export default function Controller() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hapticsEnabled, setHapticsEnabled] = useState(true);
   const [servo2Visible, setServo2Visible] = useState(false);
+  const [debugEnabled, setDebugEnabled] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   const [powerWarning, setPowerWarning] = useState(false);
-
-  const aliveRef = useRef(false);
   const modeRef = useRef<Mode>("manual");
   const heldRef = useRef<Direction | null>(null);
   const driveRef = useRef<DriveSession | null>(null);
-  const checkingRef = useRef(false);
-  const failureCount = useRef(0);
+  const linkRef = useRef<HybridRobotLink | null>(null);
+  const aliveRef = useRef(false);
   const lastUptime = useRef<number | null>(null);
+  const backgroundStopped = useRef(false);
 
-  const setHardwareMode = useCallback((value: Mode) => {
-    modeRef.current = value;
-    setMode(value);
+  const setHardwareMode = useCallback((next: Mode) => {
+    modeRef.current=next; setMode(next);
   }, []);
-
-  const disconnect = useCallback(() => {
-    if (!aliveRef.current) return;
-    setConnected(false);
-    setLinkHealth("offline");
-    setRobotStatus(null);
-    setHardwareMode("manual");
-    heldRef.current = null;
-    setHeldDirection(null);
-    driveRef.current?.release();
-  }, [setHardwareMode]);
-
-  const reportFailure = useCallback(() => {
-    if (!aliveRef.current) return;
-    failureCount.current++;
-    const next = assessLink(failureCount.current);
-    setLinkHealth(next);
-    if (next === "offline") disconnect();
-  }, [disconnect]);
-
-  const syncStatus = useCallback(async () => {
-    if (checkingRef.current || heldRef.current) return;
-    checkingRef.current = true;
-    try {
-      const next = await api.status();
-      if (!aliveRef.current) return;
-      failureCount.current = 0;
-      setLinkHealth("connected");
-      setConnected(next.ready);
-      setRobotStatus(next);
-      if (next.resetReason === "BROWNOUT" ||
-          (lastUptime.current !== null && next.uptimeMs + 1000 < lastUptime.current)) {
-        setPowerWarning(true);
-      }
-      lastUptime.current = next.uptimeMs;
-      setHardwareMode(next.mode);
-      if (next.mode === "auto") {
-        setView("auto");
-        if (next.preset) setPreset(next.preset);
-      }
-      if (!next.ready) disconnect();
-    } catch { reportFailure(); }
-    finally { checkingRef.current = false; }
-  }, [disconnect, reportFailure, setHardwareMode]);
-
   const releaseHold = useCallback(() => {
     if (!heldRef.current) return;
-    heldRef.current = null;
-    if (aliveRef.current) setHeldDirection(null);
-    driveRef.current?.release();
+    heldRef.current=null; setHeldDirection(null); driveRef.current?.release();
   }, []);
-
   useEffect(() => {
     aliveRef.current = true;
+    const link = new HybridRobotLink();
+    linkRef.current = link;
     driveRef.current = new DriveSession(
-      command => command === "stop" ? api.stop() : api.drive(command),
-      reportFailure,
+      command => command === "stop" ? link.stop() : link.drive(command),
+      () => { heldRef.current=null; setHeldDirection(null); },
     );
-    const savedHaptics = localStorage.getItem("fourwd-haptics");
-    const savedServo2 = localStorage.getItem("fourwd-servo2");
-    if (savedHaptics !== null) setHapticsEnabled(savedHaptics === "true");
-    if (savedServo2 !== null) setServo2Visible(savedServo2 === "true");
-    void syncStatus();
-    const polling = setInterval(() => void syncStatus(), 1800);
-    const heartbeat = setInterval(() => {
-      if (modeRef.current === "auto") void api.heartbeat().catch(reportFailure);
-    }, 350);
-
-    const stopOnBackground = () => {
-      releaseHold();
-      setHardwareMode("manual");
-      void api.stop().catch(() => {});
+    const feedback = localStorage.getItem("fourwd-haptics");
+    const extra = localStorage.getItem("fourwd-servo2");
+    if (feedback !== null) setHapticsEnabled(feedback === "true");
+    if (extra !== null) setServo2Visible(extra === "true");
+    const oldDebug=localStorage.getItem("fourwd-debug");
+    if(oldDebug !== null) setDebugEnabled(oldDebug === "true");
+    const unsubscribeHealth=link.onHealth(next => {
+      if (!aliveRef.current) return;
+      setLinkHealth(next); setConnected(next.connected);
+      if (!next.connected) {
+        heldRef.current=null; setHeldDirection(null);
+      }
+    });
+    const unsubscribeStatus=link.onStatus(next => {
+      if (!aliveRef.current) return;
+      setRobotStatus(next);
+      setHardwareMode(next.mode);
+      if(next.mode==="auto") {
+        setView("auto"); if(next.preset) setPreset(next.preset);
+      }
+      if(next.resetReason==="BROWNOUT" || (lastUptime.current!==null && next.uptimeMs+1000<lastUptime.current))
+        setPowerWarning(true);
+      lastUptime.current=next.uptimeMs;
+    });
+    void link.connect();
+    const heartbeat=setInterval(() => {
+      if(modeRef.current==="auto") void link.heartbeat().catch(() => {});
+    },350);
+    const onBackground=() => {
+      if(backgroundStopped.current) return;
+      backgroundStopped.current=true;
+      releaseHold(); setHardwareMode("manual");
+      void link.stop().catch(() => {});
     };
-    const onVisibility = () => { if (document.hidden) stopOnBackground(); };
-    window.addEventListener("blur", stopOnBackground);
-    document.addEventListener("visibilitychange", onVisibility);
-    let mounted = true;
-    let removeNative: (() => void) | undefined;
-    void CapacitorApp.addListener("appStateChange", state => {
-      if (!state.isActive) stopOnBackground();
-      else void syncStatus();
-    }).then(listener => {
-      if (mounted) removeNative = () => void listener.remove();
-      else void listener.remove();
-    }).catch(() => {});
-
+    const onForeground=() => { backgroundStopped.current=false; };
+    const onVisibility=() => {
+      if(document.hidden) onBackground(); else onForeground();
+    };
+    document.addEventListener("visibilitychange",onVisibility);
+    let active=true;
+    let removeNative:(()=>void)|undefined;
+    void CapacitorApp.addListener("appStateChange", s=>{
+      if(!s.isActive) onBackground(); else onForeground();
+    }).then(listener=>{
+      if(active) removeNative=()=>void listener.remove(); else void listener.remove();
+    }).catch(()=>{});
     return () => {
-      aliveRef.current = false;
-      mounted = false;
-      clearInterval(polling);
+      aliveRef.current=false; active=false;
       clearInterval(heartbeat);
-      window.removeEventListener("blur", stopOnBackground);
-      document.removeEventListener("visibilitychange", onVisibility);
-      removeNative?.();
-      driveRef.current?.release();
-      driveRef.current?.dispose();
-      driveRef.current = null;
-      void api.stop().catch(() => {});
+      document.removeEventListener("visibilitychange",onVisibility);
+      unsubscribeHealth(); unsubscribeStatus(); removeNative?.();
+      driveRef.current?.release(); driveRef.current?.dispose(); driveRef.current=null;
+      link.close(); linkRef.current=null;
     };
-  }, [reportFailure, releaseHold, setHardwareMode, syncStatus]);
+  },[releaseHold,setHardwareMode]);
 
-  const pressDrive = (direction: Direction) => {
-    if (!connected || modeRef.current !== "manual" || view !== "manual" || settingsOpen) return;
-    if (heldRef.current === direction) return;
-    heldRef.current = direction;
+  const pressDrive=(direction:Direction)=>{
+    if(!connected || modeRef.current!=="manual" || view!=="manual" || settingsOpen) return;
+    if(heldRef.current===direction) return;
+    heldRef.current=direction;
     setHeldDirection(direction);
     void tapFeedback(hapticsEnabled);
     driveRef.current?.press(direction);
   };
-
-  const stopRobot = async () => {
-    releaseHold();
-    setView("manual");
-    setHardwareMode("manual");
+  const stopRobot=async()=>{
+    releaseHold(); setView("manual"); setHardwareMode("manual");
+    void tapFeedback(hapticsEnabled);
+    try { await linkRef.current?.stop(); }
+    catch { /* ESP firmware watchdog remains the independent fail-safe */ }
+  };
+  const chooseManual=()=>{
+    setView("manual"); if(modeRef.current==="auto") void stopRobot();
+  };
+  const startAuto=async()=>{
+    if(!connected || transitioning) return;
+    releaseHold(); setTransitioning(true);
     void tapFeedback(hapticsEnabled);
     try {
-      await driveRef.current?.whenSettled();
-      await api.stop();
-      await syncStatus();
-    } catch { reportFailure(); }
-  };
-
-  const chooseManual = () => {
-    setView("manual");
-    if (modeRef.current === "auto") void stopRobot();
-  };
-
-  const startAuto = async () => {
-    if (!connected || transitioning) return;
-    releaseHold();
-    setTransitioning(true);
-    void tapFeedback(hapticsEnabled);
-    try {
-      await driveRef.current?.whenSettled();
-      await api.autopilot(preset);
+      await linkRef.current?.startAutopilot(preset==="plant" ?
+        {preset:"plant",cycles:5,returnToStart:false,driveMs:3000,settleMs:250,releaseMs:3000,returnPauseMs:0} :
+        {preset});
       setHardwareMode("auto");
-      await api.heartbeat();
-      await syncStatus();
-    } catch { reportFailure(); }
-    finally { if (aliveRef.current) setTransitioning(false); }
+      await linkRef.current?.heartbeat();
+    } catch {/* show transport health instead */}
+    finally {setTransitioning(false);}
   };
-
-  const gate = async (channel: 1 | 2, position: "open" | "close") => {
-    if (!connected || modeRef.current !== "manual" || view !== "manual") return;
+  const gate=async(channel:1|2,position:"open"|"close")=>{
+    if(!connected || modeRef.current!=="manual" || view!=="manual") return;
     void tapFeedback(hapticsEnabled);
-    try { await api.gate(channel, position); }
-    catch { reportFailure(); }
+    try { await linkRef.current?.gate(channel,position); } catch {}
   };
-
-  const setHaptics = () => {
-    const next = !hapticsEnabled;
-    setHapticsEnabled(next);
-    localStorage.setItem("fourwd-haptics", String(next));
-    void tapFeedback(next);
+  const setHaptics=()=>{
+    const next=!hapticsEnabled; setHapticsEnabled(next);
+    localStorage.setItem("fourwd-haptics",String(next)); void tapFeedback(next);
   };
-  const setServo2 = () => {
-    const next = !servo2Visible;
-    setServo2Visible(next);
-    localStorage.setItem("fourwd-servo2", String(next));
+  const setServo2=()=>{
+    const next=!servo2Visible;setServo2Visible(next);
+    localStorage.setItem("fourwd-servo2",String(next));
   };
-
-  const canDrive = connected && mode === "manual" && view === "manual" && !settingsOpen;
-  const servo2Ready = robotStatus?.servo2Enabled === true && servo2Visible;
-  const activePreset = PRESETS.find(item => item.id === preset) ?? PRESETS[0];
-
+  const toggleDebug=()=>{
+    const next=!debugEnabled;setDebugEnabled(next);
+    localStorage.setItem("fourwd-debug",String(next));
+  };
+  const canDrive=connected && mode==="manual" && view==="manual" && !settingsOpen;
+  const servo2Ready=robotStatus?.servo2Enabled===true && servo2Visible;
+  const activePreset=PRESETS.find(item=>item.id===preset) ?? PRESETS[0];
   return <div className="control-layout" role="application" aria-label="4WD field controller">
     <header className="topbar">
       <div className="identity"><span className="brand-symbol"><Gauge size={19} /></span>
         <div><strong>4WD Controller</strong><small>LOCAL ROBOT CONTROL</small></div></div>
       <div className="top-actions">
-        <div className={`board-state ${!connected ? "is-offline" : linkHealth === "unstable" ? "is-lagging" : ""}`}
+        <div className={`board-state ${!connected ? "is-offline" : linkHealth.failures > 0 ? "is-lagging" : ""}`}
           role="status">
           <Signal size={17} />
           <span>{!connected ? "Not connected" : linkHealth === "unstable" ? "Signal delay" : "Connected"}</span>
@@ -292,7 +244,7 @@ export default function Controller() {
             <p>{connected ? "Hold an arrow to drive. Release to stop." :
               `Connect your phone to ${ROBOT_SSID}, then retry.`}</p></div>
           {powerWarning && <p className="power-warning">ESP32 restarted. Check its 5V power supply.</p>}
-          {!connected && <button type="button" className="retry-action" onClick={() => void syncStatus()}>
+          {!connected && <button type="button" className="retry-action" onClick={() => { void linkRef.current?.connect(); }}>
             <RefreshCw size={16} /> Retry connection
           </button>}
           <div className="mini-readout"><span>ROBOT</span><strong>{connected ? "192.168.4.1" : "OFFLINE"}</strong></div>
@@ -355,6 +307,16 @@ export default function Controller() {
           <Settings2 size={21}/><span><strong>Show second servo</strong><small>Requires separately enabled GPIO4 firmware</small></span>
           <span className={`switch ${servo2Visible ? "on" : ""}`}/>
         </button>
+        <button type="button" className="setting-option" onClick={toggleDebug} role="switch" aria-checked={debugEnabled}>
+          <Activity size={21}/><span><strong>Latency monitor</strong><small>Show command RTT &amp; failed requests</small></span>
+          <span className={`switch ${debugEnabled ? "on" : ""}`}/>
+        </button>
+        {debugEnabled && <div className="latency-readout" role="status">
+          <span>Transport: {linkHealth.transport.toUpperCase()}</span>
+          <span>Last: {linkHealth.lastRttMs ?? "—"} ms</span>
+          <span>Avg: {linkHealth.avgRttMs ?? "—"} ms</span>
+          <span>Failures: {linkHealth.failures}</span>
+        </div>}
         <p className="setting-footnote">The camera and flashlight are disabled. Robot control is local to ESP32-CAM Wi-Fi.</p>
       </section>
     </div>}
