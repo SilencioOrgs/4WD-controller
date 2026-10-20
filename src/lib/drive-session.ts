@@ -14,10 +14,16 @@ export class DriveSession {
   private timer: ReturnType<typeof setInterval> | undefined;
   private disposed = false;
 
+  private readonly send: (command: DriveCommand) => Promise<unknown>;
+  private readonly onError: (error: unknown) => void;
+
   constructor(
-    private readonly send: (command: DriveCommand) => Promise<unknown>,
-    private readonly onError: (error: unknown) => void,
-  ) {}
+    send: (command: DriveCommand) => Promise<unknown>,
+    onError: (error: unknown) => void,
+  ) {
+    this.send = send;
+    this.onError = onError;
+  }
 
   press(direction: Direction) {
     if (this.disposed) return;
