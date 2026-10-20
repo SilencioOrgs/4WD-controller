@@ -38,3 +38,22 @@ test("direction changes are immediate even with in-flight request", () => {
   assert.deepEqual(commands, ["left","right","stop"]);
   drive.dispose();
 });
+
+test("stale rejected drive does not cancel the new held direction", async()=>{
+  let rejectLeft;
+  const commands=[];
+  const session=new DriveSession(command=>{
+    commands.push(command);
+    if(command==="left")return new Promise((_,reject)=>{rejectLeft=reject;});
+    return Promise.resolve();
+  },()=>{});
+  session.press("left");
+  session.press("right");
+  rejectLeft(new Error("HTTP request aborted by next direction"));
+  await Promise.resolve();
+  assert.deepEqual(commands,["left","right"]);
+  session.release();
+  await session.whenSettled();
+  assert.deepEqual(commands,["left","right","stop"]);
+  session.dispose();
+});

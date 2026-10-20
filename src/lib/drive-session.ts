@@ -35,7 +35,7 @@ export class DriveSession {
     if (this.disposed) return;
     try {
       this.last = Promise.resolve(this.send(command)).catch(error => {
-        if (command !== "stop") this.release();
+        if (command !== "stop" && this.held === command) this.release();
         this.onError(error);
       });
     } catch (error) {
