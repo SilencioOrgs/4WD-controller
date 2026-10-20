@@ -59,11 +59,19 @@ struct PlantTiming {
   uint32_t driveMs = 3000;
   uint32_t settleMs = 250;
   uint32_t releaseMs = 3000;
-  uint32_t returnPauseMs = 0;
+  uint32_t returnPauseMs = 350;
+  bool dispenseFirst = false; // legacy clients still move first
+  bool useRake = false; // optional future hardware
+  uint32_t rakeLiftMs = 1000;
 };
 PlantTiming planting;
 uint8_t cycleNumber = 0;
 uint8_t returnSegment = 0;
+uint8_t seedDrops = 0;
+static const uint32_t RAKE_LOWER_WAIT_MS = 150;
+// Adjust only after servo 2 has its own safe signal output and mechanical calibration.
+static const int RAKE_UP_DEGREES = 0;
+static const int RAKE_DOWN_DEGREES = 90;
 uint32_t doneAt = 0;
 String autopilotState = "idle";
 String travelDirection = "forward";
@@ -73,7 +81,8 @@ bool durationOK(uint32_t value, bool optional=false) {
 bool validPlant(const PlantTiming& p) {
   return p.cycles >= 1 && p.cycles <= 50 && durationOK(p.driveMs) &&
     durationOK(p.releaseMs) && durationOK(p.settleMs,true) &&
-    durationOK(p.returnPauseMs,true);
+    durationOK(p.returnPauseMs,true) &&
+    (!p.useRake || (ENABLE_SERVO_2 && durationOK(p.rakeLiftMs) && p.rakeLiftMs <= p.driveMs));
 }
 uint32_t phaseLimit() {
   if (mode != Mode::Plant) return PERIOD_MS;
@@ -81,23 +90,24 @@ uint32_t phaseLimit() {
   if (phase == "settle") return planting.settleMs;
   if (phase == "release") return planting.releaseMs;
   if (phase == "returnPause") return planting.returnPauseMs;
+  if (phase == "rakeDown") return RAKE_LOWER_WAIT_MS;
   return 0;
 }
 void nextPlantPhase(const String &next, uint32_t now) {
   phase=next; phaseStart=now;
 }
 void finishPlant(uint32_t now) {
-  stopMotor(); gate(false);
+  stopMotor(); gate(false); rake(false);
   nextPlantPhase("done",now);
   autopilotState="done"; doneAt=now;
 }
 void enterAuto(Mode next);  // Explicit forward declaration for Arduino .ino preprocessing.
 void startPlant(const PlantTiming& p) {
   if(!validPlant(p)) return;
-  planting=p; cycleNumber=1; returnSegment=0;
+  planting=p; cycleNumber=p.dispenseFirst ? 0 : 1; returnSegment=0; seedDrops=0;
   enterAuto(Mode::Plant);
   autopilotState="running"; travelDirection="forward";
-  nextPlantPhase("drive", millis());
+  nextPlantPhase(p.dispenseFirst ? "release" : (p.useRake ? "rakeDown" : "drive"),millis());
 }
 
 uint8_t lastMotorDuty[4] = {255,255,255,255};
@@ -142,10 +152,16 @@ void writeServo(int index, int angle) {
 void gate(bool open, int index) {
   writeServo(index, open ? SERVO_OPEN_DEGREES : SERVO_CLOSED_DEGREES);
 }
+void rake(bool down) {
+  if (!ENABLE_SERVO_2) return;
+  writeServo(1, down ? RAKE_DOWN_DEGREES : RAKE_UP_DEGREES);
+}
 void enterManual() {
   mode = Mode::Manual;
   wsDriving = false;
   stopMotor();
+  gate(false);
+  rake(false);
   phase = "idle";
   autopilotState="idle";
 }
@@ -171,40 +187,53 @@ void runAuto(uint32_t now) {
   }
   uint32_t elapsed = now - phaseStart;
   if (mode == Mode::Plant) {
-    if(phase=="drive") {
+    // A complete planting operation can start with a seed drop at the origin.
+    if (phase == "rakeDown") {
+      stopMotor(); gate(false); rake(true);
+      if (elapsed >= RAKE_LOWER_WAIT_MS) nextPlantPhase("drive", now);
+    } else if (phase == "drive") {
       gate(false);
+      if (planting.useRake && elapsed >= planting.rakeLiftMs) rake(false);
       drive("go");
-      if(elapsed >= planting.driveMs) {
-        stopMotor();
-        nextPlantPhase(planting.settleMs>0 ? "settle" : "release",now);
+      if (elapsed >= planting.driveMs) {
+        stopMotor(); rake(false);
+        nextPlantPhase(planting.settleMs > 0 ? "settle" : "release", now);
       }
-    } else if(phase=="settle") {
-      stopMotor(); gate(false);
-      if(elapsed>=planting.settleMs) nextPlantPhase("release",now);
-    } else if(phase=="release") {
-      stopMotor(); gate(true);
-      if(elapsed>=planting.releaseMs) {
+    } else if (phase == "settle") {
+      stopMotor(); gate(false); rake(false);
+      if (elapsed >= planting.settleMs) nextPlantPhase("release", now);
+    } else if (phase == "release") {
+      stopMotor(); rake(false); gate(true);
+      if (elapsed >= planting.releaseMs) {
         gate(false);
-        if(cycleNumber<planting.cycles) {
+        seedDrops++;
+        // Initial drop is at position 0 and does not count as a forward move.
+        if (planting.dispenseFirst && cycleNumber == 0) {
+          cycleNumber = 1;
+          nextPlantPhase(planting.useRake ? "rakeDown" : "drive", now);
+        } else if (cycleNumber < planting.cycles) {
           cycleNumber++;
-          nextPlantPhase("drive",now);
-        } else if(planting.returnToStart) {
-          travelDirection="returning"; returnSegment=1;
-          nextPlantPhase("returning",now);
+          nextPlantPhase(planting.useRake ? "rakeDown" : "drive", now);
+        } else if (planting.returnToStart) {
+          travelDirection = "returning";
+          returnSegment = 1;
+          nextPlantPhase("returning", now);
         } else finishPlant(now);
       }
-    } else if(phase=="returning") {
-      gate(false); drive("back");
-      if(elapsed>=planting.driveMs) {
+    } else if (phase == "returning") {
+      gate(false); rake(false);
+      drive("back");
+      if (elapsed >= planting.driveMs) {
         stopMotor();
-        if(returnSegment>=planting.cycles) finishPlant(now);
-        else if(planting.returnPauseMs>0) nextPlantPhase("returnPause",now);
-        else { returnSegment++; nextPlantPhase("returning",now); }
+        if (returnSegment >= planting.cycles) finishPlant(now);
+        else if (planting.returnPauseMs > 0) nextPlantPhase("returnPause", now);
+        else { returnSegment++; nextPlantPhase("returning", now); }
       }
-    } else if(phase=="returnPause") {
-      stopMotor(); gate(false);
-      if(elapsed>=planting.returnPauseMs) {
-        returnSegment++; nextPlantPhase("returning",now);
+    } else if (phase == "returnPause") {
+      stopMotor(); gate(false); rake(false);
+      if (elapsed >= planting.returnPauseMs) {
+        returnSegment++;
+        nextPlantPhase("returning", now);
       }
     }
     return;
@@ -321,6 +350,12 @@ String statusJSON() {
   result += ",\"uptimeMs\":" + String(millis());
   result += ",\"resetReason\":\"" + resetCause + "\"";
   result += ",\"cycle\":" + String(cycleNumber);
+  result += ",\"returnSegment\":" + String(returnSegment);
+  result += ",\"seedDrops\":" + String(seedDrops);
+  result += ",\"plannedDrops\":" + String(planting.cycles + (planting.dispenseFirst ? 1 : 0));
+  result += ",\"sequence\":\"" + String(planting.dispenseFirst ? "dispense-first" : "move-first") + "\"";
+  result += ",\"rakeEnabled\":";
+  result += ENABLE_SERVO_2 ? "true" : "false";
   result += ",\"totalCycles\":" + String(planting.cycles);
   result += ",\"returnToStart\":";
   result += planting.returnToStart ? "true" : "false";
@@ -378,6 +413,19 @@ void configureRoutes() {
         p.settleMs=server.arg("settle").toInt();
         p.releaseMs=server.arg("release").toInt();
         if(server.hasArg("returnPause")) p.returnPauseMs=server.arg("returnPause").toInt();
+        if(server.hasArg("sequence")) {
+          String sequence=server.arg("sequence");
+          if(sequence!="dispense-first" && sequence!="move-first") {
+            server.send(400,"text/plain","Invalid seed sequence"); return;
+          }
+          p.dispenseFirst=sequence=="dispense-first";
+        }
+        if(server.hasArg("rake")) {
+          String use=server.arg("rake");
+          if(use!="0" && use!="1") {server.send(400,"text/plain","Invalid rake flag");return;}
+          p.useRake=use=="1";
+        }
+        if(server.hasArg("rakeLift")) p.rakeLiftMs=server.arg("rakeLift").toInt();
       }
       if(!validPlant(p)) { server.send(400,"text/plain","Bad plant timing"); return; }
       startPlant(p);
@@ -403,7 +451,7 @@ void configureRoutes() {
   });
   // Older page compatibility. Disabled camera endpoints are intentional.
   server.on("/ledon", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "Flashlight disabled"); });
-  server.on("/ledoff", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
+  server.on("/ledoff", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "Flashlight disabled"); });
   server.on("/", HTTP_GET, []() {
     addCorsHeaders();
     server.send(200, "text/plain", "4WD FIELD UNIT online. Connect using the Capacitor controller. /status");
@@ -484,6 +532,23 @@ void handleWs(uint8_t num, WStype_t event, uint8_t *data, size_t length) {
       p.releaseMs=(uint32_t)releaseMs;
       p.returnPauseMs=(uint32_t)pause;
       p.returnToStart=doc["returnToStart"].as<bool>();
+      if(!doc["sequence"].isNull()) {
+        String sequence=doc["sequence"].as<String>();
+        if(sequence!="move-first" && sequence!="dispense-first") {
+          webSocket.sendTXT(num,"E:Unknown seed sequence"); return;
+        }
+        p.dispenseFirst=sequence=="dispense-first";
+      }
+      if(!doc["useRake"].isNull()) {
+        if(!doc["useRake"].is<bool>()) {webSocket.sendTXT(num,"E:Invalid rake option");return;}
+        p.useRake=doc["useRake"].as<bool>();
+      }
+      if(!doc["rakeLiftMs"].isNull()) {
+        if(!doc["rakeLiftMs"].is<int>() || doc["rakeLiftMs"].as<int>()<0) {
+          webSocket.sendTXT(num,"E:Invalid rake timing");return;
+        }
+        p.rakeLiftMs=doc["rakeLiftMs"].as<uint32_t>();
+      }
       if(!validPlant(p)) { webSocket.sendTXT(num,"E:Invalid plant settings"); return; }
       startPlant(p);
     }
