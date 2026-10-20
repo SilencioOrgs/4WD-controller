@@ -99,7 +99,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
  .zone-heading h2{font-size:14px;}
  .zone-heading small{font-size:9px;}
  .direction-grid{width:min(100%,calc(100dvh - 90px));gap:4px;}
- .drive-key{gap:2px;min-height:55px;}
+ .drive-key{gap:2px;min-height:64px;}
  .drive-key svg{width:25px;height:25px;}
  .drive-key span{font-size:9px;}
  .mode-zone{gap:5px;}

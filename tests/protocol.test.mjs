@@ -37,3 +37,16 @@ test("only approved motor commands and autopilot presets", () => {
   assert.throws(() => autopilotPath("random"));
   assert.throws(() => servoPath(3, "open"));
 });
+
+test("plant progress status parses cycle and done state", () => {
+  const done=parseRobotStatus({
+    device:ROBOT_DEVICE_ID,ready:true,mode:"auto",preset:"plant",
+    cycle:5,totalCycles:5,direction:"returning",returnToStart:true,
+    state:"done",phase:"done",phaseRemainingMs:0
+  });
+  assert.equal(done.cycle,5);
+  assert.equal(done.totalCycles,5);
+  assert.equal(done.direction,"returning");
+  assert.equal(done.returnToStart,true);
+  assert.equal(done.state,"done");
+});

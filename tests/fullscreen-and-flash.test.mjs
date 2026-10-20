@@ -40,3 +40,15 @@ test("DriveSession drives on press and sends final stop on release", async () =>
   assert.deepEqual(received, ["go", "stop"]);
   drive.dispose();
 });
+
+test("motor GPIO and flashlight hard constraints preserved", () => {
+  assert.match(firmware,/motorPins\[4\] = \{13, 12, 14, 15\}/);
+  assert.match(firmware,/servoPins\[2\] = \{2, 4\}/);
+  assert.match(firmware,/WiFi\.setSleep\(false\)/);
+  assert.match(firmware,/WS_MOTION_TIMEOUT_MS = 350/);
+  assert.match(firmware,/AUTO_TIMEOUT_MS = 1400/);
+  assert.match(firmware,/webSocket\.loop\(\)/);
+  assert.match(firmware,/server\.handleClient\(\)/);
+  assert.match(firmware,/server\.on\("\/auto"/);
+  assert.match(firmware,/if\(!validPlant\(p\)\)/);
+});
