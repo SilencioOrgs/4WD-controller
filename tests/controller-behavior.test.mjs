@@ -29,7 +29,7 @@ test("release queues stop behind the in-flight direction", async () => {
   session.press("go");
   assert.deepEqual(calls, ["go"]);
   session.release();
-  assert.deepEqual(calls, ["go"]);
+  assert.deepEqual(calls, ["go", "stop"]);
   finish();
   await session.whenSettled();
   assert.deepEqual(calls, ["go", "stop"]);

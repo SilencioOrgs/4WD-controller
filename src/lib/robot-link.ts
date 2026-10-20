@@ -1,5 +1,5 @@
 import { RobotApi } from "./robot-api";
-import { ROBOT_DEVICE_ID, ROBOT_HOST, type Direction, type Preset, type RobotStatus } from "./protocol";
+import { ROBOT_DEVICE_ID, parseRobotStatus, type Direction, type RobotStatus } from "./protocol";
 import type { PlantConfig } from "./plant-plan";
 
 export type Transport = "ws" | "http";
@@ -10,12 +10,8 @@ export type LinkHealth = {
 export type StatusListener = (status: RobotStatus) => void;
 export type HealthListener = (health: LinkHealth) => void;
 
-export function reconnectDelay(attempt: number) {
-  return Math.min(1500, 250 * (2 ** Math.max(0, Math.min(attempt, 3))));
-}
-export function selectTransport(wsOpen: boolean, fallbackReady: boolean): Transport | null {
-  return wsOpen ? "ws" : fallbackReady ? "http" : null;
-}
+export { reconnectDelay, selectTransport } from "./link-policy";
+import { reconnectDelay } from "./link-policy";
 
 export interface RobotLink {
   connect(): Promise<void>;
@@ -132,6 +128,7 @@ export class HybridRobotLink implements RobotLink {
   private statusListeners = new Set<StatusListener>();
   private healthListeners = new Set<HealthListener>();
   private polling: ReturnType<typeof setInterval> | null = null;
+  private connecting: Promise<void> | null = null;
   private pendingAck = new Map<number, number>();
   private rtts: number[] = [];
   private seq = 0;
@@ -162,7 +159,6 @@ export class HybridRobotLink implements RobotLink {
           (status as Record<string, unknown>).device === ROBOT_DEVICE_ID)
           ? status : null;
         if (!parsed) return;
-        const { parseRobotStatus } = requireProtocol();
         const s = parseRobotStatus(parsed);
         this.statusListeners.forEach(fn => fn(s));
         this.publish({ connected: s.ready, failures: 0, transport: "ws" });
@@ -209,6 +205,12 @@ export class HybridRobotLink implements RobotLink {
     }
   }
   async connect() {
+    if (this.closed || this.ws.open || this.connecting) return this.connecting ?? Promise.resolve();
+    const work = this.openLink();
+    this.connecting = work;
+    try { await work; } finally { this.connecting = null; }
+  }
+  private async openLink() {
     this.ws.connect();
     await Promise.race([
       new Promise<void>(resolve => {
@@ -218,6 +220,7 @@ export class HybridRobotLink implements RobotLink {
       new Promise<void>(resolve => setTimeout(resolve, 1500))
     ]);
     if (!this.ws.open) await this.probeFallback();
+    if (this.polling) clearInterval(this.polling);
     this.polling = setInterval(() => {
       if (this.ws.open) {
         // Status is pushed; ACK exchange measures actual command-path RTT.
@@ -277,6 +280,4 @@ export class HybridRobotLink implements RobotLink {
     this.closed = true;
   }
 }
-// ESM import kept explicit for static Next.js bundling.
-import { parseRobotStatus } from "./protocol";
-function requireProtocol() { return { parseRobotStatus }; }
+

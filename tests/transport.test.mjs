@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reconnectDelay, selectTransport } from "../src/lib/robot-link.ts";
+import { reconnectDelay, selectTransport } from "../src/lib/link-policy.ts";
 import { DriveSession } from "../src/lib/drive-session.ts";
 
 test("reconnect backs off but stays under 1.5 seconds", () => {
