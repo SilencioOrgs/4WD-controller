@@ -71,7 +71,10 @@ export function useRobot() {
     const unsubHealth=link.onHealth(next=>{
       if(!alive.current) return;
       setHealth(next);
-      if(!next.connected) {heldRef.current=null;setHeld(null);}
+      if(!next.connected) {
+        heldRef.current=null; setHeld(null); setStatus(null);
+        driveRef.current?.release();
+      }
     });
     const unsubStatus=link.onStatus(next=>{
       if(!alive.current)return;
