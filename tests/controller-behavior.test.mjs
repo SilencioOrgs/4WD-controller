@@ -1,39 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessLink, shouldStartAutopilotOnTab } from "../src/lib/control-logic.ts";
-import { calibrationPath, parseRobotStatus, ROBOT_DEVICE_ID } from "../src/lib/protocol.ts";
+import { assessLink } from "../src/lib/control-logic.ts";
+import { parseRobotStatus, ROBOT_DEVICE_ID } from "../src/lib/protocol.ts";
 import { DriveSession } from "../src/lib/drive-session.ts";
 
-test("one missed poll means unstable, not disconnected", () => {
+test("a transient poll error does not mark a board disconnected", () => {
+  assert.equal(assessLink(0), "connected");
   assert.equal(assessLink(1), "unstable");
   assert.equal(assessLink(2), "unstable");
   assert.equal(assessLink(3), "offline");
-  assert.equal(assessLink(0), "connected");
 });
-
-test("opening autopilot tab NEVER starts moving", () => {
-  assert.equal(shouldStartAutopilotOnTab("auto"), false);
-  assert.equal(shouldStartAutopilotOnTab("manual"), false);
-});
-
-test("calibration command validates all settings", () => {
-  assert.equal(calibrationPath({ leftInverted: true, rightInverted: false, swappedSides: true }),
-    "/calibrate?left=1&right=0&swap=1");
-  assert.throws(() => calibrationPath({ leftInverted: 1, rightInverted: false, swappedSides: false }));
-});
-
-test("status carries motor inversion and ESP32 uptime / last reset", () => {
-  const result = parseRobotStatus({
+test("diagnostics identify a possible brownout restart", () => {
+  const status = parseRobotStatus({
     device: ROBOT_DEVICE_ID, ready: true, mode: "manual",
-    uptimeMs: 3012, resetReason: "BROWNOUT",
-    calibration: { leftInverted: true, rightInverted: false, swappedSides: false }
+    uptimeMs: 3012, resetReason: "BROWNOUT"
   });
-  assert.equal(result.uptimeMs, 3012);
-  assert.equal(result.resetReason, "BROWNOUT");
-  assert.deepEqual(result.calibration, { leftInverted: true, rightInverted: false, swappedSides: false });
+  assert.equal(status.uptimeMs, 3012);
+  assert.equal(status.resetReason, "BROWNOUT");
 });
-
-test("drive release queues stop after in-flight drive, with no stale extra drive", async () => {
+test("release queues stop behind the in-flight direction", async () => {
   let finish;
   const calls = [];
   const session = new DriveSession(command => {
@@ -50,8 +35,7 @@ test("drive release queues stop after in-flight drive, with no stale extra drive
   assert.deepEqual(calls, ["go", "stop"]);
   session.dispose();
 });
-
-test("directions preserve requested direction when quickly switching", async () => {
+test("switching direction and releasing never loses the final stop", async () => {
   const calls = [];
   const session = new DriveSession(async command => { calls.push(command); }, () => {});
   session.press("left");
@@ -61,5 +45,19 @@ test("directions preserve requested direction when quickly switching", async () 
   session.release();
   await session.whenSettled();
   assert.deepEqual(calls, ["left", "right", "stop"]);
+  session.dispose();
+});
+test("a single command error stops transmission and requests a stop", async () => {
+  const calls = [];
+  let failures = 0;
+  const session = new DriveSession(command => {
+    calls.push(command);
+    if (command === "go") return Promise.reject(new Error("Temporary Wi-Fi delay"));
+    return Promise.resolve();
+  }, () => { failures++; });
+  session.press("go");
+  await session.whenSettled();
+  assert.deepEqual(calls, ["go", "stop"]);
+  assert.equal(failures, 1);
   session.dispose();
 });

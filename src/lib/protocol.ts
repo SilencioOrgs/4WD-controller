@@ -17,16 +17,8 @@ export type RobotStatus = {
   preset: Preset | null;
   uptimeMs: number;
   resetReason: string;
-  calibration: MotorCalibration;
   servo2Enabled: boolean;
 };
-
-export type MotorCalibration = {
-  leftInverted: boolean;
-  rightInverted: boolean;
-  swappedSides: boolean;
-};
-export const DEFAULT_CALIBRATION: MotorCalibration = { leftInverted: false, rightInverted: false, swappedSides: false };
 
 export const PRESETS = [
   { id: "plant", title: "Plant cycle", description: "Drive 3s, stop 3s, release gate", short: "GATE / MOVE" },
@@ -60,11 +52,6 @@ export function parseRobotStatus(data: unknown): RobotStatus {
     servo2Enabled: value.servo2Enabled === true,
     uptimeMs: typeof value.uptimeMs === "number" ? Math.max(0, value.uptimeMs) : 0,
     resetReason: typeof value.resetReason === "string" ? value.resetReason : "UNKNOWN",
-    calibration: typeof value.calibration === "object" && value.calibration !== null && !Array.isArray(value.calibration) ? {
-      leftInverted: (value.calibration as Record<string, unknown>).leftInverted === true,
-      rightInverted: (value.calibration as Record<string, unknown>).rightInverted === true,
-      swappedSides: (value.calibration as Record<string, unknown>).swappedSides === true,
-    } : { ...DEFAULT_CALIBRATION },
     preset
   };
 }
@@ -82,11 +69,3 @@ export function servoPath(channel: 1 | 2, gate: "open" | "close"): string {
   return "/servo?channel=" + channel + "&gate=" + gate;
 }
 
-export function calibrationPath(calibration: MotorCalibration): string {
-  for (const value of Object.values(calibration)) {
-    if (typeof value !== "boolean") throw new Error("Motor calibration requires booleans");
-  }
-  return "/calibrate?left=" + Number(calibration.leftInverted) +
-    "&right=" + Number(calibration.rightInverted) +
-    "&swap=" + Number(calibration.swappedSides);
-}

@@ -14,7 +14,6 @@
 #include <WebServer.h>
 #include "driver/ledc.h"
 #include "esp_system.h"
-#include <Preferences.h>
 
 static const char* AP_SSID = "ESP32-CAM Robot";
 static const char* AP_PASS = "robotcontrol"; // change before first deployment
@@ -22,8 +21,6 @@ static const uint32_t MOTION_TIMEOUT_MS = 700;
 static const uint32_t AUTO_TIMEOUT_MS = 1400;
 static const uint32_t PERIOD_MS = 3000;
 static const uint8_t MOTOR_PWM = 150;
-// Set to true only when a second servo is physically fitted and powered.
-static const bool ENABLE_SERVO_2 = false;
 static const int motorPins[4] = {13, 12, 14, 15};
 static const ledc_channel_t motorChannels[4] = {
   LEDC_CHANNEL_4, LEDC_CHANNEL_5, LEDC_CHANNEL_6, LEDC_CHANNEL_7
@@ -34,13 +31,7 @@ static const int SERVO_OPEN_DEGREES = 0;
 static const int SERVO_CLOSED_DEGREES = 90;
 
 WebServer server(80);
-Preferences motorSettings;
-bool invertLeft = false;
-bool invertRight = false;
-bool swapSides = false;
-uint8_t lastDuties[4] = {255, 255, 255, 255};
-int lastServoAngles[2] = {-1, -1};
-String bootReason = "UNKNOWN";
+String resetCause = "UNKNOWN";
 enum class Mode { Manual, Plant, Cruise, Pulse };
 Mode mode = Mode::Manual;
 String motion = "stop";
@@ -53,17 +44,8 @@ uint32_t phaseStart = 0;
 
 void writeMotor(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
   if (!motorReady) return;
-  // Calibrate channel directions without changing the original GPIO mapping.
-  if (invertLeft) { uint8_t temp = a; a = b; b = temp; }
-  if (invertRight) { uint8_t temp = c; c = d; d = temp; }
-  if (swapSides) {
-    uint8_t temp = a; a = c; c = temp;
-    temp = b; b = d; d = temp;
-  }
   uint8_t values[4] = {a, b, c, d};
   for (int i = 0; i < 4; ++i) {
-    if (lastDuties[i] == values[i]) continue;
-    lastDuties[i] = values[i];
     ledc_set_duty(LEDC_LOW_SPEED_MODE, motorChannels[i], values[i]);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, motorChannels[i]);
   }
@@ -85,10 +67,8 @@ void drive(const String& direction) {
   } else { stopMotor(); }
 }
 void writeServo(int index, int angle) {
-  if (!servoReady || index < 0 || index > 1 || (index == 1 && !ENABLE_SERVO_2)) return;
+  if (!servoReady || index < 0 || index > 1) return;
   angle = constrain(angle, 0, 180);
-  if (lastServoAngles[index] == angle) return;
-  lastServoAngles[index] = angle;
   // 50Hz 16-bit PWM: 500–2500 microseconds.
   uint32_t pulseUs = 500 + (uint32_t)angle * 2000 / 180;
   uint32_t duty = (uint32_t)((uint64_t)pulseUs * 65535 / 20000);
@@ -197,7 +177,6 @@ void initServos() {
   timer.clk_cfg = LEDC_AUTO_CLK;
   if (ledc_timer_config(&timer) != ESP_OK) return;
   for (int i = 0; i < 2; ++i) {
-    if (i == 1 && !ENABLE_SERVO_2) continue;
     ledc_channel_config_t channel = {};
     channel.gpio_num = servoPins[i];
     channel.speed_mode = LEDC_LOW_SPEED_MODE;
@@ -212,13 +191,13 @@ void initServos() {
   gate(false, 0);
   gate(false, 1);
 }
-String readResetReason() {
+String resetCauseName() {
   switch (esp_reset_reason()) {
     case ESP_RST_BROWNOUT: return "BROWNOUT";
     case ESP_RST_POWERON: return "POWER_ON";
-    case ESP_RST_SW: return "SOFTWARE";
     case ESP_RST_PANIC: return "PANIC";
     case ESP_RST_WDT: return "WATCHDOG";
+    case ESP_RST_SW: return "SOFTWARE";
     default: return "OTHER";
   }
 }
@@ -234,17 +213,8 @@ void configureRoutes() {
     result += mode == Mode::Manual ? 0 : (int)max(0L, (long)PERIOD_MS - (long)(millis() - phaseStart));
     result += ",\"servoEnabled\":";
     result += servoReady ? "true" : "false";
-    result += ",\"servo2Enabled\":";
-    result += ENABLE_SERVO_2 ? "true" : "false";
     result += ",\"uptimeMs\":" + String(millis());
-    result += ",\"resetReason\":\"" + bootReason + "\"";
-    result += ",\"calibration\":{\"leftInverted\":";
-    result += invertLeft ? "true" : "false";
-    result += ",\"rightInverted\":";
-    result += invertRight ? "true" : "false";
-    result += ",\"swappedSides\":";
-    result += swapSides ? "true" : "false";
-    result += "}";
+    result += ",\"resetReason\":\"" + resetCause + "\"";
     result += ",\"preset\":";
     if (mode == Mode::Plant) result += "\"plant\"";
     else if (mode == Mode::Cruise) result += "\"cruise\"";
@@ -283,47 +253,19 @@ void configureRoutes() {
     gate(position == "open", channel - 1);
     respondOK();
   });
-  server.on("/calibrate", HTTP_GET, []() {
-    addCorsHeaders();
-    // Never update motor directions while driving or autopilot is active.
-    if (mode != Mode::Manual || motion != "stop") {
-      server.send(409, "text/plain", "Stop the robot before motor calibration");
-      return;
-    }
-    const String l = server.arg("left");
-    const String r = server.arg("right");
-    const String s = server.arg("swap");
-    if ((l != "0" && l != "1") || (r != "0" && r != "1") ||
-        (s != "0" && s != "1")) {
-      server.send(400, "text/plain", "Calibration values must be 0 or 1");
-      return;
-    }
-    invertLeft = (l == "1");
-    invertRight = (r == "1");
-    swapSides = (s == "1");
-    motorSettings.putBool("left", invertLeft);
-    motorSettings.putBool("right", invertRight);
-    motorSettings.putBool("swap", swapSides);
-    stopMotor();
-    respondOK();
-  });
   // Older page compatibility. Disabled camera endpoints are intentional.
   server.on("/ledon", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
   server.on("/ledoff", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
   server.on("/", HTTP_GET, []() {
     addCorsHeaders();
-    server.send(200, "text/plain", "4WD FIELD UNIT online. Connect using the Next.js Capacitor app. /status");
+    server.send(200, "text/plain", "4WD FIELD UNIT online. Connect using the Flutter controller. /status");
   });
   server.onNotFound([]() { addCorsHeaders(); server.send(404, "text/plain", "Unknown command"); });
 }
 void setup() {
   Serial.begin(115200);
-  bootReason = readResetReason();
-  Serial.printf("[BOOT] reset=%s\n", bootReason.c_str());
-  motorSettings.begin("motorcal", false);
-  invertLeft = motorSettings.getBool("left", false);
-  invertRight = motorSettings.getBool("right", false);
-  swapSides = motorSettings.getBool("swap", false);
+  resetCause = resetCauseName();
+  Serial.printf("[BOOT] reason=%s\\n", resetCause.c_str());
   initMotors();
   initServos();
   WiFi.mode(WIFI_AP);

@@ -2,13 +2,13 @@ import type { Direction } from "./protocol";
 export type DriveCommand = Direction | "stop";
 
 /**
- * One in-flight motor command at a time. A release always becomes the next
- * outgoing command, so no late drive response can overtake the stop request.
- * Repeated held commands refresh the board's 700ms watchdog without flooding.
+ * Single-flight, ordered motor requests. Every release queues a stop behind
+ * the last in-flight drive response. Refreshes the ESP32 motion watchdog
+ * while held, without flooding WebServer with overlapping commands.
  */
 export class DriveSession {
   private wanted: Direction | null = null;
-  private latest: DriveCommand = "stop";
+  private lastSent: DriveCommand = "stop";
   private pending: Promise<void> = Promise.resolve();
   private busy = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -23,7 +23,7 @@ export class DriveSession {
     if (this.disposed) return;
     this.wanted = direction;
     if (this.timer) clearInterval(this.timer);
-    this.timer = setInterval(() => this.pump(true), 230);
+    this.timer = setInterval(() => this.pump(true), 250);
     this.pump(true);
   }
 
@@ -36,15 +36,20 @@ export class DriveSession {
 
   private pump(refresh = false) {
     if (this.disposed || this.busy) return;
-    const target: DriveCommand = this.wanted ?? "stop";
-    if (target === this.latest && !refresh) return;
+    const next: DriveCommand = this.wanted ?? "stop";
+    if (next === this.lastSent && !refresh) return;
     this.busy = true;
-    this.latest = target;
-    let failed = false;
-    this.pending = Promise.resolve().then(() => this.send(target))
+    this.lastSent = next;
+    // The call starts immediately, on pointer-down, rather than a microtask later.
+    let task: Promise<unknown>;
+    try {
+      task = this.send(next);
+    } catch (error) {
+      task = Promise.reject(error);
+    }
+    this.pending = Promise.resolve(task)
       .then(() => undefined)
       .catch(error => {
-        failed = true;
         this.wanted = null;
         if (this.timer) clearInterval(this.timer);
         this.timer = undefined;
@@ -53,12 +58,12 @@ export class DriveSession {
       .finally(() => {
         this.busy = false;
         if (this.disposed) return;
-        const next = this.wanted ?? "stop";
-        if (failed || next !== target) this.pump();
+        if ((this.wanted ?? "stop") !== next) this.pump();
       });
   }
 
-  async whenSettled(): Promise<void> {
+  async whenSettled() {
+    // Account for a queued stop after the current request finishes.
     while (this.busy) await this.pending;
   }
 
