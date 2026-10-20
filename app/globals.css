@@ -141,3 +141,49 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .rtt-overlay{display:flex;align-items:baseline;gap:7px;color:var(--muted);font-variant-numeric:tabular-nums;font-size:10px;white-space:nowrap;}
 .rtt-overlay strong{font-size:14px;color:var(--text);}
 @media(max-width:740px){.rtt-overlay{font-size:8px;gap:4px;}.rtt-overlay strong{font-size:10px;}}
+
+/* Beginner-friendly planting form: clear 1–4 steps with large, touchable choices. */
+.plant-form.beginner{gap:10px;padding:1px 2px 8px;}
+.form-title{display:flex;flex-direction:column;gap:3px;}
+.form-title strong{font-size:16px;font-weight:750;letter-spacing:-.3px;}
+.form-title small{font-size:11px;color:var(--muted);}
+.simple-field{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.simple-field>span,.simple-label{color:var(--text);font-size:12px;font-weight:720;line-height:1.35;}
+.simple-field select,.simple-field input{width:100%;min-height:42px;border:1px solid var(--border);border-radius:8px;background:var(--surface-alt);color:var(--text);padding:7px 10px;font-size:13px;}
+.simple-field small,.simple-label small,.field-help{color:var(--muted);font-size:10px;line-height:1.35;font-weight:450;}
+.simple-label small{display:block;margin-top:2px;}
+.simple-section{display:flex;flex-direction:column;gap:7px;}
+.simple-section.cycles-row{flex-direction:row;align-items:center;justify-content:space-between;}
+.two-choices{width:100%;min-height:44px;}
+.two-choices button{min-height:38px;gap:6px;font-weight:700;white-space:nowrap;}
+.field-help{margin:0;display:flex;align-items:center;gap:6px;}
+.sequence-summary{border:1px solid var(--border);background:var(--surface-alt);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:5px;}
+.sequence-summary strong{font-size:12px;}
+.sequence-summary span{font-size:12px;font-weight:680;line-height:1.4;}
+.sequence-summary small{font-size:10px;color:var(--muted);line-height:1.35;}
+.advanced-plant{border:1px solid var(--border);border-radius:8px;background:var(--surface-alt);}
+.advanced-plant summary{padding:11px 12px;cursor:pointer;font-size:12px;font-weight:700;line-height:1.4;list-style-position:inside;}
+.advanced-plant summary small{font-size:10px;color:var(--muted);font-weight:450;margin-left:6px;}
+.advanced-fields{padding:2px 12px 12px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;}
+.advanced-fields>.field-help{grid-column:1/-1;}
+.future-rake{border-top:1px solid var(--border);padding-top:9px;display:flex;flex-direction:column;gap:4px;}
+.future-rake label{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:650;}
+.future-rake input{width:18px;height:18px;accent-color:var(--accent);}
+.future-rake small{font-size:10px;color:var(--muted);line-height:1.4;}
+@media(max-height:540px) and (orientation:landscape){
+ .plant-form.beginner{gap:7px;}
+ .form-title strong{font-size:13px;}
+ .form-title small{font-size:10px;}
+ .simple-field select{min-height:32px;padding:4px 8px;}
+ .simple-field>span,.simple-label{font-size:11px;}
+ .two-choices{min-height:36px;}
+ .two-choices button{min-height:29px;font-size:10px;padding:4px 3px;white-space:normal;}
+ .sequence-summary{padding:7px;gap:3px;}
+ .sequence-summary span{font-size:10px;}
+ .sequence-summary small{font-size:9px;}
+ .advanced-plant summary{padding:8px;font-size:11px;}
+ .advanced-fields{grid-template-columns:1fr 1fr;gap:6px;padding:3px 7px 8px;}
+ .simple-field input{min-height:29px;font-size:11px;}
+ .future-rake label{font-size:10px;}
+ .future-rake small{font-size:9px;}
+}
