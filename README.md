@@ -58,6 +58,33 @@ The Android project is **generated** and intentionally excluded from Git. The pr
 
 Connect your phone to **ESP32-CAM Robot** Wi-Fi (SSID); Android may show **Connected without Internet**. Stay on the network. If commands cannot connect, temporarily disable mobile data and Android "switch to mobile data"/network-assist so traffic stays on the no-internet ESP32 AP.
 
+## Seed dispensing — easy setup (October 2026)
+
+The Plant Cycle editor now leads with four questions: **Select plant**, **Dispense first / Move first**, **Forward moves**, and **Stop there / Go back**. It shows a readable route summary. Advanced fields are optional and displayed in **seconds**, not milliseconds.
+
+- **Dispense first** with 2 forward moves: drop at the start → close gate → forward step 1 → drop → close gate → forward step 2 → drop → close gate → optionally reverse step 1 → pause → reverse step 2 → STOP. Total: **3 seed drops, 2 forward moves, 2 reverse moves**.
+- **Move first** with 2 forward moves: forward step 1 → drop → close gate → forward step 2 → drop → close gate → optionally reverse two timed steps. Total: **2 seed drops, 2 forward moves, 2 reverse moves**.
+- The software waits **220 ms** after commanding the dispensing gate closed before any next movement. Check this experimentally against your MG90S linkage; it may require a longer delay for your hardware.
+- Return is **timed reverse**, not GPS/odometry: it does not guarantee returning to the same physical point. The updated app explicitly displays **Reverse move 1 of 2 / 2 of 2**, and the firmware stops for **350 ms** between return steps by default.
+- **Rake, future Servo 2**: still **disabled** until the hardware is safely added, including a signal-pinning solution that does not light GPIO4's flash LED. The UI shows a disabled rake toggle for now. Once installed and deliberately enabled in firmware, its experimental sequence is lower rake after seed gate closes, start forward, lift after about 1 second of movement. Validate the positions and clearances before physically enabling it.
+
+### Meaning of the legacy advanced values
+
+| Setting | In everyday terms |
+| --- | --- |
+| Spacing (cm) | Optional target travel distance. 0 means use the timer instead. Requires real wheel-speed calibration. |
+| Drive (ms) | Forward/reverse motor-on time per step (e.g. 3000 ms = 3 seconds). |
+| Settle (ms) | Pause between reaching the next spot and opening the seed gate (250 ms = 0.25 seconds). |
+| Gate release (ms) | Time Servo 1 keeps the gate open (800 ms = 0.8 seconds). |
+| Forward moves / Cycles | Count of **actual forward segments**, not number of seed drops. |
+| Stop / Return | End in place, or reverse the same number of timed segments. |
+
+**If Return does not move backward:** The firmware sends exactly the same `drive("back")` motor command as your Manual Reverse button. Test Manual Reverse with wheels raised first. If it spins or moves forward instead, correct the existing physical wheel polarity/direction mapping before trusting Return; the new sequence deliberately does **not** change GPIO assignments or invert your motor outputs.
+
+### HTTP / WebSocket controls
+
+WebSocket `A:` plant JSON now accepts optional `sequence: "dispense-first" | "move-first"`, `useRake: false`, and `rakeLiftMs: 1000`. The old JSON remains valid, using the legacy move-first default. HTTP accepts `&sequence=dispense-first&returnPause=350&rake=0&rakeLift=1000` in addition to the previous plant parameters. New status fields include `returnSegment`, `seedDrops`, `plannedDrops`, `sequence`, and `rakeEnabled`.
+
 ## Operating modes
 
 **Manual:** Hold an arrow; pressing sends WS motion immediately, then every ~100 ms; release sends STOP immediately. A degraded HTTP fallback does not flood overlapping motor requests: it aborts in-flight HTTP drive on STOP or direction change and sends stop separately. Keep the board within range.
