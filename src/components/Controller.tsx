@@ -212,7 +212,7 @@ export default function Controller() {
         <div className={`board-state ${!connected ? "is-offline" : linkHealth.failures > 0 ? "is-lagging" : ""}`}
           role="status">
           <Signal size={17} />
-          <span>{!connected ? "Not connected" : linkHealth === "unstable" ? "Signal delay" : "Connected"}</span>
+          <span>{!connected ? "Not connected" : linkHealth.failures > 0 ? "Signal delay" : "Connected"}</span>
         </div>
         <button className="settings-trigger" type="button" aria-label="Controller settings"
           onClick={() => { releaseHold(); setSettingsOpen(true); }}><Settings2 size={20} /></button>
