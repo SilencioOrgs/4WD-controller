@@ -18,6 +18,11 @@ export type RobotStatus = {
   uptimeMs: number;
   resetReason: string;
   servo2Enabled: boolean;
+  cycle: number;
+  totalCycles: number;
+  direction: "forward" | "returning";
+  returnToStart: boolean;
+  state: "idle" | "running" | "done";
 };
 
 export const PRESETS = [
@@ -50,6 +55,11 @@ export function parseRobotStatus(data: unknown): RobotStatus {
       ? Math.max(0, value.phaseRemainingMs) : 0,
     servoEnabled: value.servoEnabled === true,
     servo2Enabled: value.servo2Enabled === true,
+    cycle: typeof value.cycle === "number" ? value.cycle : 0,
+    totalCycles: typeof value.totalCycles === "number" ? value.totalCycles : 0,
+    direction: value.direction === "returning" ? "returning" : "forward",
+    returnToStart: value.returnToStart === true,
+    state: value.state === "done" ? "done" : value.state === "running" ? "running" : "idle",
     uptimeMs: typeof value.uptimeMs === "number" ? Math.max(0, value.uptimeMs) : 0,
     resetReason: typeof value.resetReason === "string" ? value.resetReason : "UNKNOWN",
     preset
