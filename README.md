@@ -56,13 +56,39 @@ The Android platform and APK are generated locally and intentionally not committ
 
 The controller never claims the robot is connected based only on Wi-Fi state; it waits for a valid ESP32 status response.
 
+## Fullscreen touch controller (current)
+
+The handheld/PSP frame has been replaced with a flat, minimal, edge-to-edge
+three-column landscape controller. Drive buttons are large touch targets.
+Manual driving uses the existing single-flight hold-to-drive stream and the
+ESP32's 700ms stop watchdog. Releasing a button sends STOP; status polling
+does not compete with held commands. The app tolerates isolated delayed
+responses instead of instantly reporting offline. The Android preparation
+script also configures immersive fullscreen navigation/status bars where
+supported.
+
+**Flashlight behavior:** AI Thinker ESP32-CAM uses **GPIO4** for its white flash
+LED. The firmware now sets `ENABLE_SERVO_2 = false` by default, holds GPIO4
+LOW, and skips configuring its servo PWM channel entirely. This prevents
+the flashlight turning on as a side effect of initializing an unused
+second servo. Servo 1 remains on GPIO2. If you later change
+`ENABLE_SERVO_2 = true` to control a second servo on GPIO4, PWM on that
+pin will also drive the onboard LED; use a different controller/pin
+arrangement to avoid that hardware conflict. Settings cannot override
+the firmware's disabled second-servo state.
+
+The existing L298N IN1–IN4 pins and drive-direction mapping have **not
+been modified**. If Forward/Reverse/Left/Right do not match the physical
+robot, test with wheels raised and correct the wiring/firmware separately.
+The app cannot fix ESP32 brownouts from inadequate 5V motor-driver power.
+
 ## Controls
 
 | Control | Behavior |
 | --- | --- |
 | D-pad | Hold to drive Forward / Back / Left / Right; release to stop |
 | A / B | Servo gate 1 open / close in Manual mode |
-| X / Y | Optional servo gate 2 close / open if enabled in Settings and wired |
+| Second servo | Disabled by default; requires physical wiring and firmware opt-in |
 | Manual | Cancels Autopilot, stops motors |
 | Auto preset | Start selected timed routine |
 | Stop / Override | Explicit software motor stop and switch to Manual |
@@ -85,7 +111,7 @@ App sends a heartbeat every ~350ms while automatic mode is active. The ESP32 wat
 | GPIO13 | L298N IN3 |
 | GPIO12 | L298N IN4 |
 | GPIO2 | MG90S #1 signal orange |
-| GPIO4 | Optional MG90S #2 orange (shares onboard flash LED) |
+| GPIO4 | Onboard flash LED held LOW by default; second servo disabled in firmware |
 | GND | Common L298N and XL4016 GND |
 | 5V | Proper regulated 5V power |
 
