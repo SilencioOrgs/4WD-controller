@@ -17,9 +17,9 @@ test("5 cycles without return only travels forward",()=>{
  assert.equal(p.at(-1).phase,"done");
 });
 test("validation rejects potentially unsafe missing/out-of-range durations",()=>{
- assert.match(validatePlantConfig({...five,cycles:51}),/Cycles/);
+ assert.match(validatePlantConfig({...five,cycles:51}),/Forward moves/);
  assert.match(validatePlantConfig({...five,driveMs:0}),/Drive/);
- assert.match(validatePlantConfig({...five,settleMs:25}),/Settle/);
+ assert.match(validatePlantConfig({...five,settleMs:25}),/Waiting/);
  assert.equal(validatePlantConfig({...five,settleMs:0,returnPauseMs:0}),null);
 });
 test("spacing time is derived from user-measured speed, with safe clamp",()=>{
