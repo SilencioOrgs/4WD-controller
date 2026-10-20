@@ -10,7 +10,7 @@ import {RotateCcw} from "lucide-react";
 export default function Controller() {
  const robot=useRobot();
  return <div className="control-layout" role="application" aria-label="4WD controller">
-  <TopBar health={robot.health} onSettings={()=>{robot.release();robot.setSettingsOpen(true);}}/>
+  <TopBar health={robot.health} debug={robot.debug} onSettings={()=>{robot.release();robot.setSettingsOpen(true);}}/>
   <main className="controller-grid">
    <DrivePad enabled={robot.connected && robot.view==="manual" && robot.status?.mode==="manual" && !robot.settingsOpen}
      held={robot.held} press={robot.drive} release={robot.release}/>

@@ -137,3 +137,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
  .portrait-notice span{font-size:12px;color:var(--muted);}
 }
 @media(prefers-reduced-motion:reduce){*{animation-duration:0s!important;transition:none!important;}}
+
+.rtt-overlay{display:flex;align-items:baseline;gap:7px;color:var(--muted);font-variant-numeric:tabular-nums;font-size:10px;white-space:nowrap;}
+.rtt-overlay strong{font-size:14px;color:var(--text);}
+@media(max-width:740px){.rtt-overlay{font-size:8px;gap:4px;}.rtt-overlay strong{font-size:10px;}}
