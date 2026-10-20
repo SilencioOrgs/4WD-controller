@@ -1,31 +1,50 @@
-# 4WD / FIELD CONTROLLER
+# 4WD Controller
 
-Android-first Next.js + Capacitor controller for the **LAFVIN ESP32-CAM 4WD Robot Car Kit V3**. No Flutter, no Arduino Uno, no cloud inference, and no camera streaming for this version.
+Local-only, landscape-first robot control: **Next.js 15 static export + Capacitor 7 Android + AI Thinker ESP32-CAM**. Camera and flashlight are disabled. No Arduino Uno, accounts, cloud server, or Flutter SDK.
 
-The complete Next.js app and matching ESP32 firmware are in this repository. The interface is an original PSP-inspired graphite-and-silver landscape handheld controller, with flat Lucide SVG icons (no emoji) and system typography.
+## Architecture and prerequisites
 
-## Requirements
+- Phone connects to the ESP32-CAM access point **ESP32-CAM Robot** (default password `robotcontrol`, change this in firmware).
+- **Primary:** persistent WebSocket at `ws://192.168.4.1:81`. Direct small text command frames; status pushed every 500ms or when the state changes.
+- **Fallback:** the original HTTP GET API on `http://192.168.4.1`, selected if WebSocket connection is unavailable after 1.5 seconds. WS automatically retries with 250/500/1000/1500 ms backoff.
+- In Android Studio, Capacitor WebView uses `https://localhost`; `capacitor.config.ts` already allows mixed content for local `ws://` and `http://` connections. Actual mixed-content behavior still needs testing on your phone.
+- WebSocket Manual deadman stops after **350ms without a driving frame**; HTTP fallback uses **700ms**. Auto stops when heartbeats are missing for **1400ms**. Socket disconnect sends an immediate stop. App also stops on background, and STOP cancels any routine. **These are software failsafes; retain an accessible physical motor power switch.**
+- Hardware: ESP32-CAM 4WD kit, L298N, MG90S with suitable **regulated external 5V**, common grounds, multimeter. Core Arduino **ESP32 3.x**.
 
-- Node.js 22+ and npm
-- Android Studio with Android SDK + a USB-connected Android phone for an APK
-- Arduino IDE with the Espressif ESP32 boards package 3.x to flash the firmware
-- ESP32-CAM kit already wired to L298N, and properly powered 5V MG90S servo(s) when ready
-- A multimeter to verify the XL4016 5V output **before** connecting servo power
+**Arduino IDE library requirements:** Boards Manager install **esp32 by Espressif Systems 3.x** (tested in CI with **3.3.2**). In Library Manager install **WebSockets by Markus Sattler / Links2004** (header `WebSocketsServer.h`) and **ArduinoJson by Benoit Blanchon v7** (`ArduinoJson.h`). Board: **AI Thinker ESP32-CAM**, Arduino-ESP32 FQBN `esp32:esp32:esp32cam`.
 
-## Run as a website first
+## Wiring — unchanged
+
+| ESP32-CAM | Component |
+| --- | --- |
+| GPIO15 | L298N IN1 |
+| GPIO14 | L298N IN2 |
+| GPIO13 | L298N IN3 |
+| GPIO12 | L298N IN4 |
+| GPIO2 | MG90S #1 signal |
+| GPIO4 | **Flash LED held LOW**, second servo disabled (`ENABLE_SERVO_2 = false`) |
+| 5V | Correctly regulated 5V supply |
+| GND | Common L298N/XL4016/servo ground |
+
+No motor direction mapping or motor output wiring was changed. Keep L298N ENA/ENB motor-enable jumpers fitted, and retain your existing four DC motor connections. GPIO2 is a boot-strapping pin; do not connect the SD card. Servo 2 cannot be enabled on GPIO4 without also driving the flash LED.
+
+**Power caution:** Three 18650 cells in series reach 12.6V fully charged; the L298N onboard 5V regulator must **not** be used on this fully charged pack. Do not feed two regulator outputs together. The recommended single XL4016 5V supply can power the ESP32-CAM and servo, and the L298N logic **with its 5V-EN regulator jumper removed**. Check 5V output using a multimeter before connecting. The motor power still comes from the 3S pack through a suitable switch/protection.
+
+## Run Next.js locally
 
 ```bash
 git pull origin main
 npm install
 npm run test
+npm run typecheck
 npm run dev
 ```
 
-Visit `http://localhost:3000` on a computer. The UI is available even without the board, but shows **Robot not connected** until the ESP32 is running the updated firmware and the computer is joined to its Wi-Fi hotspot. Browser-to-ESP32 requests are CORS-enabled by the bundled firmware.
+Open `http://localhost:3000`. Offline from the robot the UI reports "Offline". No hosted server is required. The app is a Next.js **static export**.
 
-## Build the Android app with Capacitor
+## Install on Android
 
-The old Flutter `android/` files were removed. Capacitor generates a new Android project from the Next.js static export.
+First install Node.js 22+, Android Studio and Android SDK. Enable USB debugging on your phone.
 
 ```bash
 npm install
@@ -33,104 +52,60 @@ npm run cap:add:android
 npm run cap:open
 ```
 
-`cap:add:android` runs `next build`, creates the Android project and applies the required manifest settings. Android Studio then opens the generated project. From Android Studio, build or install the app onto your phone.
+Select the USB-connected Android device and click **Run** in Android Studio. Later: `git pull origin main && npm run cap:sync && npm run cap:open`, then Run again.
 
-**Later code updates:** `npm run cap:sync` followed by `npm run cap:open`. Capacitor embeds the `out/` files in the APK. **No online website/server is required on the phone.**
+The Android project is **generated** and intentionally excluded from Git. The prepare script enables immersive landscape, Internet permission and cleartext local networking.
 
-Android configuration:
-- Landscape orientation on the native Activity, with an in-app rotate prompt for web portrait
-- `INTERNET` permission and local cleartext HTTP support
-- Mixed content enabled because the Capacitor WebView's `https://localhost` origin fetches `http://192.168.4.1`
-- Capacitor Haptics and App lifecycle plugins
+Connect your phone to **ESP32-CAM Robot** Wi-Fi (SSID); Android may show **Connected without Internet**. Stay on the network. If commands cannot connect, temporarily disable mobile data and Android "switch to mobile data"/network-assist so traffic stays on the no-internet ESP32 AP.
 
-The Android platform and APK are generated locally and intentionally not committed to Git. **Flutter is not needed.**
+## Operating modes
 
-## Connect to the robot
+**Manual:** Hold an arrow; pressing sends WS motion immediately, then every ~100 ms; release sends STOP immediately. A degraded HTTP fallback does not flood overlapping motor requests: it aborts in-flight HTTP drive on STOP or direction change and sends stop separately. Keep the board within range.
 
-1. Open `firmware/ESP32_CAM_4WD_Controller/ESP32_CAM_4WD_Controller.ino` in Arduino IDE; select AI Thinker ESP32-CAM and ESP32 core 3.x.
-2. Flash the updated firmware. The camera is disabled.
-3. Join the phone Wi-Fi network **ESP32-CAM Robot**, password **robotcontrol** (change the default in the firmware before deployment).
-4. If Android reports **No internet**, remain connected to that network. If HTTP requests still fail, temporarily disable mobile data / switch-to-mobile-data assistance.
-5. Open the Capacitor app; status detection checks the `device: LAFVIN-4WD` marker at `192.168.4.1/status`.
-6. Test driving with the **wheels raised** and servo horn removed. Verify every direction and STOP before enabling Autopilot.
+**Autopilot:** Select the mode first; selection alone does not move the robot. Tap **Start Autopilot** to begin. The ESP32 executes the timed schedule without a phone timer. A 350ms phone heartbeat refreshes the 1400ms auto watchdog. STOP immediately cancels the routine.
 
-The controller never claims the robot is connected based only on Wi-Fi state; it waits for a valid ESP32 status response.
+**Utility:**
+- **Cruise:** drives forward continuously and toggles gate every three seconds.
+- **Pulse:** drives for three seconds, stops for three seconds; gate closed.
 
-## Fullscreen touch controller (current)
+**Plant Cycle:** Select Corn, Tomato, Lettuce, Eggplant or Custom. All sample timings and spacing are **editable placeholders, not agronomic recommendations**. Edit spacing or drive time, settle time and gate release time. Configure **1–50 cycles**, default 5. Finish with **Stop** or **Return**.
 
-The handheld/PSP frame has been replaced with a flat, minimal, edge-to-edge
-three-column landscape controller. Drive buttons are large touch targets.
-Manual driving uses the existing single-flight hold-to-drive stream and the
-ESP32's 700ms stop watchdog. Releasing a button sends STOP; status polling
-does not compete with held commands. The app tolerates isolated delayed
-responses instead of instantly reporting offline. The Android preparation
-script also configures immersive fullscreen navigation/status bars where
-supported.
+One cycle is: drive forward `driveMs`, stop for optional `settleMs`, open gate for `releaseMs`, close gate; repeat. Return drives backward the same number of `driveMs` segments with gate closed and then stops. An optional `returnPauseMs` configuration (firmware-level, default 0) inserts pauses. **Return is time-based dead reckoning, not actual localization:** wheel slip, turning error, and battery level cause drift. It cannot guarantee reaching the starting position.
 
-**Flashlight behavior:** AI Thinker ESP32-CAM uses **GPIO4** for its white flash
-LED. The firmware now sets `ENABLE_SERVO_2 = false` by default, holds GPIO4
-LOW, and skips configuring its servo PWM channel entirely. This prevents
-the flashlight turning on as a side effect of initializing an unused
-second servo. Servo 1 remains on GPIO2. If you later change
-`ENABLE_SERVO_2 = true` to control a second servo on GPIO4, PWM on that
-pin will also drive the onboard LED; use a different controller/pin
-arrangement to avoid that hardware conflict. Settings cannot override
-the firmware's disabled second-servo state.
+**Calibrating time and spacing:** Put robot wheels on the surface you intend to test, in a cleared supervised area. Measure the real distance traveled over 3 seconds, then set **Robot speed (cm/s)** in Settings. The shipped 10 cm/s value is purely illustrative. When spacing is >0, `driveMs = spacingCm / robotSpeedCmPerSec × 1000` (clamped to 100–20,000 ms); spacing 0 uses directly edited drive time. Do not assume the supplied sample timings or crop spacing are suitable.
 
-The existing L298N IN1–IN4 pins and drive-direction mapping have **not
-been modified**. If Forward/Reverse/Left/Right do not match the physical
-robot, test with wheels raised and correct the wiring/firmware separately.
-The app cannot fix ESP32 brownouts from inadequate 5V motor-driver power.
+**Progress:** Shows cycle X/N, Forward/Returning direction, phase, remaining phase time, and Done. The gate closes when done, and the firmware returns to Manual after 10 seconds (or immediately on STOP).
 
-## Controls
+**Settings:** vibration, latency debug (last/average command RTT and failures; off by default), optional servo 2 display (firmware disabled), calibrated speed. Theme turns soft green when Plant Cycle is selected, returns to neutral in Manual or Utility. Reduced motion and high-contrast text are supported.
 
-| Control | Behavior |
+## WebSocket protocol (port 81)
+
+Client → ESP32 text frames:
+
+| Frame | Function |
 | --- | --- |
-| D-pad | Hold to drive Forward / Back / Left / Right; release to stop |
-| A / B | Servo gate 1 open / close in Manual mode |
-| Second servo | Disabled by default; requires physical wiring and firmware opt-in |
-| Manual | Cancels Autopilot, stops motors |
-| Auto preset | Start selected timed routine |
-| Stop / Override | Explicit software motor stop and switch to Manual |
-| Settings | Local haptic vibration and optional second-servo UI |
+| `D:go`, `D:back`, `D:left`, `D:right` | Drive command repeated ~100ms while held |
+| `S` | Immediate stop and cancel routine |
+| `H` | Autopilot heartbeat |
+| `G:1:open`, `G:1:close` | Servo 1 (servo 2 disabled) |
+| `A:{"preset":"plant","cycles":5,"returnToStart":false,"driveMs":3000,"settleMs":250,"releaseMs":800,"returnPauseMs":0}` | Start validated Plant Cycle |
+| `A:{"preset":"cruise"}` / `A:{"preset":"pulse"}` | Utility routine |
+| `Q` | Request status |
 
-Autopilot presets operate **on the ESP32**, not via a phone timer:
+Robot → client: `T:<json>` (pushed at least every 500ms plus state changes), optional `ACK:<seq>` for frames `D:go:<seq>` / `S:<seq>`, and `E:<message>` on rejected commands. One controller WebSocket client; a new one drops the old and stops motors.
 
-- **Plant cycle:** Gate closed and move forward for 3 seconds (250ms settling delay), then stop and open the gate for 3 seconds, repeat.
-- **Cruise:** Move forward continuously while toggling gate state every 3 seconds.
-- **Pulse drive:** Move forward 3 seconds, stop 3 seconds, gate stays closed.
+The `/status` JSON includes original fields `device`, `ready`, `mode`, `motion`, `preset`, `phase`, `phaseRemainingMs`, `servoEnabled`, `servo2Enabled`, `uptimeMs`, `resetReason`, plus `cycle`, `totalCycles`, `direction`, `returnToStart`, and `state` (idle/running/done).
 
-App sends a heartbeat every ~350ms while automatic mode is active. The ESP32 watchdog stops autopilot if heartbeats disappear for 1400ms, and stops manual movement when directional commands stop for 700ms. App also sends stop on background/blur. These are **software-only**, and do not replace an accessible physical motor power switch. Autopilot has **no obstacle detection**.
+HTTP fallback endpoints remain: `/status /go /back /left /right /stop /heartbeat /auto /servo`. Plant HTTP example:
+`/auto?mode=plant&cycles=5&return=1&drive=3000&settle=250&release=800&returnPause=0`.
+`/auto?mode=plant` continues to use a safe default cycle configuration. Utility `/auto?mode=cruise|pulse` is unchanged.
 
-## ESP32-CAM wiring (original LAFVIN mapping)
+## Test and safety procedure
 
-| ESP32-CAM pin | Destination |
-| --- | --- |
-| GPIO15 | L298N IN1 |
-| GPIO14 | L298N IN2 |
-| GPIO13 | L298N IN3 |
-| GPIO12 | L298N IN4 |
-| GPIO2 | MG90S #1 signal orange |
-| GPIO4 | Onboard flash LED held LOW by default; second servo disabled in firmware |
-| GND | Common L298N and XL4016 GND |
-| 5V | Proper regulated 5V power |
+1. With motors **disconnected or wheels raised**, upload firmware and test ESP32 boot, 5V, flash LED off, servo without horn.
+2. Join the robot AP, open Android app. Enable **Settings → Latency overlay** and note last and average RTT. Compare `WS` and degraded `HTTP` fallback if available. **Under 60ms** is a design target on a healthy local AP, not a verified measurement.
+3. Hold and release each directional button. Verify motor mapping separately. Do not attach the mechanical gate until servo directions are confirmed.
+4. Turn the app off or disconnect Wi-Fi during a held command. Confirm wheels stop **within the specified deadman** (350ms WS; 700ms HTTP). During Auto disconnect, verify stop within 1400ms. Physical timing must be measured.
+5. Only then test a **single** Plant Cycle with Return disabled. Verify STOP and phases, then multi-cycle/Return in a clear area. Never operate unattended; **no obstacle sensors/encoders**.
 
-Keep L298N ENA/ENB motor-enable jumpers as installed. Batteries remain on L298N motor power.
-
-### Critical power limitations
-
-Your three 18650 cells **in series** reach **12.6V fully charged**. The L298N onboard 5V regulator should not be used above 12V motor supply. Although your old wiring supplied ESP32 5V from L298N, **do not rely on this as the safe permanent configuration**; moving only servo power to XL4016 does not eliminate that risk.
-
-Recommended single-XL4016 final setup: switched protected 3S battery feeds both L298N motor input and XL4016 input. Adjust XL4016 output to **5.0V with multimeter**. XL4016 OUT+ feeds ESP32-CAM 5V, the MG90S servos, and L298N logic 5V input **only after removing its 5V-EN onboard-regulator jumper**. XL4016 OUT− joins all grounds. Do not connect two separate 5V regulator outputs together.
-
-Set each servo's open and closed angles in the firmware with its horn removed, and verify current headroom for simultaneous stalls. GPIO2 is a boot strapping pin; GPIO4 is shared with flash LED. No SD card should be installed. Confirm ESP32 reliably boots with the signal wires connected before loading the mechanism.
-
-## API
-
-Local ESP32 HTTP GET endpoints: `/status`, `/go`, `/back`, `/left`, `/right`, `/stop`, `/heartbeat`, `/auto?mode=plant|cruise|pulse`, `/servo?channel=1|2&gate=open|close`.
-
-Status reports `device`, `ready`, `mode`, `motion`, `phase`, `phaseRemainingMs`, `servoEnabled`, and `preset`. CORS is enabled for local Capacitor WebView access. Only an ESP32 with this firmware will pass the app's device identity check. The Wi-Fi is local; anyone connected to the AP may send commands. Change the default Wi-Fi password.
-
-## Validation
-
-`npm run test` runs the protocol regression tests using Node 22. `npm run build` exports the static Next.js application; `npm run cap:sync` copies it to the native Android project. No hardware/electronics behavior should be considered tested until validated on the physical robot.
+`npm run test`, `npm run typecheck`, `npm run build`, and `npm run cap:add:android` are run in CI. Arduino firmware compilation is a separate CI job; physical Android WebView WebSocket mixed-content, radio latency, actual servo timing, and motor power/brownouts require bench testing.
