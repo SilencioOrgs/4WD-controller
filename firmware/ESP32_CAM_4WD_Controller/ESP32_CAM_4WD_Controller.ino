@@ -26,6 +26,9 @@ static const ledc_channel_t motorChannels[4] = {
   LEDC_CHANNEL_4, LEDC_CHANNEL_5, LEDC_CHANNEL_6, LEDC_CHANNEL_7
 };
 static const int servoPins[2] = {2, 4};
+// The AI Thinker ESP32-CAM flash LED is on GPIO4. Leave this false unless
+// servo 2 is actually installed: PWM on GPIO4 otherwise lights the flash.
+static const bool ENABLE_SERVO_2 = false;
 static const ledc_channel_t servoChannels[2] = {LEDC_CHANNEL_2, LEDC_CHANNEL_3};
 static const int SERVO_OPEN_DEGREES = 0;
 static const int SERVO_CLOSED_DEGREES = 90;
@@ -67,7 +70,7 @@ void drive(const String& direction) {
   } else { stopMotor(); }
 }
 void writeServo(int index, int angle) {
-  if (!servoReady || index < 0 || index > 1) return;
+  if (!servoReady || index < 0 || index > 1 || (index == 1 && !ENABLE_SERVO_2)) return;
   angle = constrain(angle, 0, 180);
   // 50Hz 16-bit PWM: 500–2500 microseconds.
   uint32_t pulseUs = 500 + (uint32_t)angle * 2000 / 180;
@@ -169,6 +172,12 @@ void initMotors() {
   stopMotor();
 }
 void initServos() {
+  if (!ENABLE_SERVO_2) {
+    // Keep the onboard flashlight OFF when servo 2 is not used.
+    digitalWrite(4, LOW);
+    pinMode(4, OUTPUT);
+    digitalWrite(4, LOW);
+  }
   ledc_timer_config_t timer = {};
   timer.speed_mode = LEDC_LOW_SPEED_MODE;
   timer.duty_resolution = LEDC_TIMER_16_BIT;
@@ -177,6 +186,7 @@ void initServos() {
   timer.clk_cfg = LEDC_AUTO_CLK;
   if (ledc_timer_config(&timer) != ESP_OK) return;
   for (int i = 0; i < 2; ++i) {
+    if (i == 1 && !ENABLE_SERVO_2) continue;
     ledc_channel_config_t channel = {};
     channel.gpio_num = servoPins[i];
     channel.speed_mode = LEDC_LOW_SPEED_MODE;
@@ -213,6 +223,8 @@ void configureRoutes() {
     result += mode == Mode::Manual ? 0 : (int)max(0L, (long)PERIOD_MS - (long)(millis() - phaseStart));
     result += ",\"servoEnabled\":";
     result += servoReady ? "true" : "false";
+    result += ",\"servo2Enabled\":";
+    result += ENABLE_SERVO_2 ? "true" : "false";
     result += ",\"uptimeMs\":" + String(millis());
     result += ",\"resetReason\":\"" + resetCause + "\"";
     result += ",\"preset\":";
@@ -250,15 +262,18 @@ void configureRoutes() {
     if (channel < 1 || channel > 2 || (position != "open" && position != "close")) {
       server.send(400, "text/plain", "Bad servo parameters"); return;
     }
+    if (channel == 2 && !ENABLE_SERVO_2) {
+      server.send(409, "text/plain", "Servo 2 disabled to keep flashlight off"); return;
+    }
     gate(position == "open", channel - 1);
     respondOK();
   });
   // Older page compatibility. Disabled camera endpoints are intentional.
-  server.on("/ledon", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
+  server.on("/ledon", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "Flashlight disabled"); });
   server.on("/ledoff", HTTP_GET, []() { addCorsHeaders(); server.send(410, "text/plain", "GPIO4 assigned to servo 2"); });
   server.on("/", HTTP_GET, []() {
     addCorsHeaders();
-    server.send(200, "text/plain", "4WD FIELD UNIT online. Connect using the Flutter controller. /status");
+    server.send(200, "text/plain", "4WD FIELD UNIT online. Connect using the Capacitor controller. /status");
   });
   server.onNotFound([]() { addCorsHeaders(); server.send(404, "text/plain", "Unknown command"); });
 }
