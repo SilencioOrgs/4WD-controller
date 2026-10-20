@@ -20,6 +20,9 @@ export function toPlantConfig(plant: PlantPreset, cycles: number, returnToStart:
     driveMs:Math.max(100, Math.min(20000,raw)),
     settleMs:plant.settleMs,
     releaseMs:plant.releaseMs,
-    returnPauseMs:0,
+    returnPauseMs:350, // Visible stop between reverse segments
+    sequence:"move-first", // consumer UI overrides with selected preference
+    useRake:false,
+    rakeLiftMs:1000,
   };
 }

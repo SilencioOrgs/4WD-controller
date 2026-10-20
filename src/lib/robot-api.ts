@@ -29,7 +29,9 @@ export class RobotApi {
     return this.get(config.preset === "plant" ?
       "/auto?mode=plant&cycles=" + config.cycles + "&return=" + Number(config.returnToStart) +
        "&drive=" + config.driveMs + "&settle=" + config.settleMs +
-       "&release=" + config.releaseMs + "&returnPause=" + config.returnPauseMs :
+       "&release=" + config.releaseMs + "&returnPause=" + config.returnPauseMs +
+       "&sequence=" + (config.sequence ?? "move-first") +
+       "&rake=" + Number(config.useRake === true) + "&rakeLift=" + (config.rakeLiftMs ?? 1000) :
       autopilotPath(config.preset), 1200);
   }
 }

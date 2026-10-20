@@ -6,7 +6,7 @@ import { DriveSession } from "@/lib/drive-session";
 import { tapFeedback } from "@/lib/haptics";
 import { ROBOT_SSID, type Direction, type Mode, type Preset, type RobotStatus } from "@/lib/protocol";
 import { EXAMPLE_PLANTS, DEFAULT_ROBOT_SPEED_CM_S, toPlantConfig, type PlantPreset } from "@/lib/plants";
-import { validatePlantConfig } from "@/lib/plant-plan";
+import { validatePlantConfig, type SeedSequence } from "@/lib/plant-plan";
 
 export function useRobot() {
   const [status,setStatus]=useState<RobotStatus|null>(null);
@@ -24,6 +24,8 @@ export function useRobot() {
   const [plantId,setPlantId]=useState("corn");
   const [cycles,setCycles]=useState(5);
   const [returnToStart,setReturnToStart]=useState(false);
+  const [sequence,setSequence]=useState<SeedSequence>("dispense-first");
+  const [useRake,setUseRake]=useState(false);
   const [speed,setSpeed]=useState(DEFAULT_ROBOT_SPEED_CM_S);
   const [error,setError]=useState<string|null>(null);
   const linkRef=useRef<HybridRobotLink|null>(null);
@@ -34,7 +36,7 @@ export function useRobot() {
   const alive=useRef(false);
   const backgroundStopped=useRef(false);
   const selectedPlant=plants.find(p=>p.id===plantId) ?? plants[0];
-  const configuration=toPlantConfig(selectedPlant,cycles,returnToStart,speed);
+  const configuration={...toPlantConfig(selectedPlant,cycles,returnToStart,speed),sequence,useRake:useRake && status?.servo2Enabled===true};
   const configurationError=validatePlantConfig(configuration);
   const connected=health.connected && status?.ready===true;
 
@@ -63,6 +65,9 @@ export function useRobot() {
       if(Array.isArray(values)&&values.length===EXAMPLE_PLANTS.length&&values.every(p=>typeof p.id==="string" && typeof p.name==="string" && Number.isFinite(p.driveMs) && Number.isFinite(p.settleMs) && Number.isFinite(p.releaseMs) && Number.isFinite(p.spacingCm)))
         setPlants(values);
     } catch {}
+    const order=localStorage.getItem("fourwd-sequence");
+    if(order==="dispense-first"||order==="move-first")setSequence(order);
+    setReturnToStart(localStorage.getItem("fourwd-return")==="true");
     const cached=localStorage.getItem("fourwd-speed");
     if(cached && Number(cached)>0) setSpeed(Number(cached));
     setHaptics(localStorage.getItem("fourwd-haptics")!=="false");
@@ -112,6 +117,8 @@ export function useRobot() {
 
   useEffect(()=>{localStorage.setItem("fourwd-plants",JSON.stringify(plants));},[plants]);
   useEffect(()=>{localStorage.setItem("fourwd-speed",String(speed));},[speed]);
+  useEffect(()=>{localStorage.setItem("fourwd-sequence",sequence);},[sequence]);
+  useEffect(()=>{localStorage.setItem("fourwd-return",String(returnToStart));},[returnToStart]);
   useEffect(()=>{document.documentElement.dataset.theme=view==="auto"&&routine==="plant"?"plant":"default";
     return ()=>{delete document.documentElement.dataset.theme;};
   },[routine,view]);
@@ -152,6 +159,6 @@ export function useRobot() {
   return {status,health,connected,view,setView,selectAutoView,chooseManual,routine,setRoutine,held,drive,release,stop,run,gate,
     haptics,debug,settingsOpen,setSettingsOpen,servo2Visible,toggleHaptics,toggleDebug,toggleServo2,
     retry,powerWarning,runningCommand,plants,plantId,setPlantId,selectedPlant,editPlant,
-    cycles,setCycles,returnToStart,setReturnToStart,speed,setSpeed,configuration,configurationError,error,
+    cycles,setCycles,returnToStart,setReturnToStart,sequence,setSequence,useRake,setUseRake,speed,setSpeed,configuration,configurationError,error,
     ssid:ROBOT_SSID};
 }
