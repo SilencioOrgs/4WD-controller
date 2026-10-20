@@ -52,6 +52,7 @@ bool servoReady = false;
 uint32_t lastMove = 0;
 uint32_t lastHeartbeat = 0;
 uint32_t phaseStart = 0;
+void gate(bool open, int index=0);
 struct PlantTiming {
   uint8_t cycles = 5;
   bool returnToStart = false;
@@ -138,7 +139,7 @@ void writeServo(int index, int angle) {
   ledc_set_duty(LEDC_LOW_SPEED_MODE, servoChannels[index], duty);
   ledc_update_duty(LEDC_LOW_SPEED_MODE, servoChannels[index]);
 }
-void gate(bool open, int index = 0) {
+void gate(bool open, int index) {
   writeServo(index, open ? SERVO_OPEN_DEGREES : SERVO_CLOSED_DEGREES);
 }
 void enterManual() {
