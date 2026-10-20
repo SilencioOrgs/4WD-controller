@@ -51,9 +51,9 @@ export function buildPlantPlan(config: PlantConfig): PlantSegment[] {
 
   if (sequence === "dispense-first") { add("release", 0, config.releaseMs); add("gateClose",0,220); }
   for (let cycle = 1; cycle <= config.cycles; cycle++) {
-    if (rake) add("rakeDown", cycle, 150);
+    if (rake && (sequence==="dispense-first" || cycle>1)) add("rakeDown", cycle, 150);
     add("drive", cycle, config.driveMs);
-    if (rake) add("rakeUp", cycle, 0); // marker: lift occurs DURING the drive, at rakeLiftMs
+    if (rake && (sequence==="dispense-first" || cycle>1)) add("rakeUp", cycle, 0); // marker: lift occurs DURING the drive, at rakeLiftMs
     if (config.settleMs > 0) add("settle", cycle, config.settleMs);
     add("release", cycle, config.releaseMs);
     add("gateClose", cycle, 220);

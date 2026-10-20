@@ -110,7 +110,7 @@ void startPlant(const PlantTiming& p) {
   planting=p; cycleNumber=p.dispenseFirst ? 0 : 1; returnSegment=0; seedDrops=0;
   enterAuto(Mode::Plant);
   autopilotState="running"; travelDirection="forward";
-  nextPlantPhase(p.dispenseFirst ? "release" : (p.useRake ? "rakeDown" : "drive"),millis());
+  nextPlantPhase(p.dispenseFirst ? "release" : "drive",millis());
 }
 
 uint8_t lastMotorDuty[4] = {255,255,255,255};
@@ -196,7 +196,7 @@ void runAuto(uint32_t now) {
       if (elapsed >= RAKE_LOWER_WAIT_MS) nextPlantPhase("drive", now);
     } else if (phase == "drive") {
       gate(false);
-      if (planting.useRake && elapsed >= planting.rakeLiftMs) rake(false);
+      if (planting.useRake && (planting.dispenseFirst || cycleNumber > 1) && elapsed >= planting.rakeLiftMs) rake(false);
       drive("go");
       if (elapsed >= planting.driveMs) {
         stopMotor(); rake(false);

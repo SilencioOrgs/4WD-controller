@@ -35,3 +35,10 @@ test("fails closed on invalid lift times and requires sufficient movement for ra
  assert.match(validatePlantConfig({...base,sequence:"unknown"}),/sequence/i);
  assert.equal(validatePlantConfig({...base,sequence:"move-first",useRake:false}),null);
 });
+
+test("move-first never lowers rake before the first seed drop",()=>{
+ const p=buildPlantPlan({...base,sequence:"move-first",useRake:true,returnToStart:false});
+ assert.equal(p[0].phase,"drive");
+ assert.equal(p.filter(s=>s.phase==="rakeDown").length,1);
+ assert.equal(p.filter(s=>s.phase==="rakeUp").length,1);
+});
