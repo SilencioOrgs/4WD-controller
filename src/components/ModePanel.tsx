@@ -35,7 +35,7 @@ export function ModePanel({robot:r}:{robot:ReturnTypeUseRobot}) {
              ? "Dispensing at starting point"
              : `Forward move ${r.status?.cycle||1} of ${r.status?.totalCycles||r.cycles}`
          : "Routine running"}</strong>
-       <div className="progress-sub">{r.status?.phase==="release"?"Dispensing seeds":r.status?.phase==="settle"?"Waiting before dispense":r.status?.phase==="returnPause"?"Pause before next reverse":r.status?.phase==="returning"?"Moving backward":r.status?.phase==="drive"?"Moving forward":r.status?.phase==="rakeDown"?"Rake down":r.status?.phase||"Preparing"} · {((r.status?.phaseRemainingMs||0)/1000).toFixed(1)} seconds</div>
+       <div className="progress-sub">{r.status?.phase==="release"?"Dispensing seeds":r.status?.phase==="settle"?"Waiting before dispense":r.status?.phase==="gateClose"?"Closing seed gate":r.status?.phase==="returnPause"?"Pause before next reverse":r.status?.phase==="returning"?"Moving backward":r.status?.phase==="drive"?"Moving forward":r.status?.phase==="rakeDown"?"Rake down":r.status?.phase||"Preparing"} · {((r.status?.phaseRemainingMs||0)/1000).toFixed(1)} seconds</div>
        {r.routine==="plant"&&<div className="progress-sub">{r.status?.seedDrops??0} / {r.status?.plannedDrops??r.cycles} seed drops complete</div>}
        <div className="progress-rail" aria-label="Current cycle progress"><span style={{width:`${Math.min(100,Math.max(0,100*(r.status?.direction==="returning"
          ? (r.status?.returnSegment||0)/(r.status?.totalCycles||1)

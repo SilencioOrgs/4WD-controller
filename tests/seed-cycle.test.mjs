@@ -6,14 +6,14 @@ const base={preset:"plant",cycles:2,returnToStart:true,driveMs:3000,settleMs:250
 
 test("dispense-first: two forward moves dispense three times and reverse twice",()=>{
  const p=buildPlantPlan({...base,sequence:"dispense-first"});
- assert.deepEqual(p.map(s=>s.phase),["release","drive","settle","release","drive","settle","release","returning","returnPause","returning","done"]);
+ assert.deepEqual(p.map(s=>s.phase),["release","gateClose","drive","settle","release","gateClose","drive","settle","release","gateClose","returning","returnPause","returning","done"]);
  assert.equal(p.filter(s=>s.phase==="release").length,3);
  assert.equal(p.filter(s=>s.phase==="returning").length,2);
 });
 
 test("move-first: two forward moves dispense twice then reverse twice",()=>{
  const p=buildPlantPlan({...base,sequence:"move-first"});
- assert.deepEqual(p.map(s=>s.phase),["drive","settle","release","drive","settle","release","returning","returnPause","returning","done"]);
+ assert.deepEqual(p.map(s=>s.phase),["drive","settle","release","gateClose","drive","settle","release","gateClose","returning","returnPause","returning","done"]);
 });
 
 test("no-return and no-rake preserve safe defaults",()=>{
