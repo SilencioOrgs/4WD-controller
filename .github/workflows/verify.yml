@@ -28,3 +28,20 @@ jobs:
           grep -q 'screenOrientation="landscape"' android/app/src/main/AndroidManifest.xml
           grep -q 'usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml
+
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+      - name: Install ESP32 core 3.x and firmware libraries
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.2 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install "WebSockets" "ArduinoJson"
+      - name: Compile AI Thinker ESP32-CAM firmware
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32cam firmware/ESP32_CAM_4WD_Controller
