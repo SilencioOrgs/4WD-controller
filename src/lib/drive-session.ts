@@ -8,9 +8,13 @@ export class DriveSession {
   private timer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   private last: Promise<unknown> = Promise.resolve();
-  constructor(private readonly send: (command: DriveCommand) => Promise<unknown>,
-              private readonly onError: (error: unknown) => void,
-              private readonly intervalMs = 100) {}
+  private readonly send: (command: DriveCommand) => Promise<unknown>;
+  private readonly onError: (error: unknown) => void;
+  private readonly intervalMs: number;
+  constructor(send: (command: DriveCommand) => Promise<unknown>,
+              onError: (error: unknown) => void, intervalMs = 100) {
+    this.send = send; this.onError = onError; this.intervalMs = intervalMs;
+  }
   press(dir: Direction) {
     if (this.disposed) return;
     this.held = dir;
