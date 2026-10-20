@@ -57,7 +57,7 @@ struct PlantTiming {
   bool returnToStart = false;
   uint32_t driveMs = 3000;
   uint32_t settleMs = 250;
-  uint32_t releaseMs = 800;
+  uint32_t releaseMs = 3000;
   uint32_t returnPauseMs = 0;
 };
 PlantTiming planting;
@@ -90,6 +90,7 @@ void finishPlant(uint32_t now) {
   nextPlantPhase("done",now);
   autopilotState="done"; doneAt=now;
 }
+void enterAuto(Mode next);  // Explicit forward declaration for Arduino .ino preprocessing.
 void startPlant(const PlantTiming& p) {
   if(!validPlant(p)) return;
   planting=p; cycleNumber=1; returnSegment=0;
@@ -98,10 +99,13 @@ void startPlant(const PlantTiming& p) {
   nextPlantPhase("drive", millis());
 }
 
+uint8_t lastMotorDuty[4] = {255,255,255,255};
 void writeMotor(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
   if (!motorReady) return;
   uint8_t values[4] = {a, b, c, d};
-  for (int i = 0; i < 4; ++i) {
+  for (int i=0; i<4; ++i) {
+    if(lastMotorDuty[i] == values[i]) continue;
+    lastMotorDuty[i]=values[i];
     ledc_set_duty(LEDC_LOW_SPEED_MODE, motorChannels[i], values[i]);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, motorChannels[i]);
   }
@@ -122,9 +126,12 @@ void drive(const String& direction) {
     motion = "right";
   } else { stopMotor(); }
 }
+int lastServoAngle[2]={-1,-1};
 void writeServo(int index, int angle) {
   if (!servoReady || index < 0 || index > 1 || (index == 1 && !ENABLE_SERVO_2)) return;
   angle = constrain(angle, 0, 180);
+  if(lastServoAngle[index] == angle) return;
+  lastServoAngle[index] = angle;
   // 50Hz 16-bit PWM: 500–2500 microseconds.
   uint32_t pulseUs = 500 + (uint32_t)angle * 2000 / 180;
   uint32_t duty = (uint32_t)((uint64_t)pulseUs * 65535 / 20000);
@@ -165,7 +172,7 @@ void runAuto(uint32_t now) {
   if (mode == Mode::Plant) {
     if(phase=="drive") {
       gate(false);
-      if(elapsed >= 250) drive("go"); else stopMotor();
+      drive("go");
       if(elapsed >= planting.driveMs) {
         stopMotor();
         nextPlantPhase(planting.settleMs>0 ? "settle" : "release",now);
@@ -363,7 +370,9 @@ void configureRoutes() {
         String ret=server.arg("return");
         if(ret!="0" && ret!="1") {server.send(400,"text/plain","Bad return flag");return;}
         p.returnToStart=ret=="1";
-        p.cycles=server.arg("cycles").toInt();
+        int cycles=server.arg("cycles").toInt();
+        if(cycles<1 || cycles>50) { server.send(400,"text/plain","Cycle count must be 1–50"); return; }
+        p.cycles=(uint8_t)cycles;
         p.driveMs=server.arg("drive").toInt();
         p.settleMs=server.arg("settle").toInt();
         p.releaseMs=server.arg("release").toInt();
