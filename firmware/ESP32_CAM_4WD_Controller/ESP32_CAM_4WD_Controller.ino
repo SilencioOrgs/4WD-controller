@@ -52,6 +52,51 @@ bool servoReady = false;
 uint32_t lastMove = 0;
 uint32_t lastHeartbeat = 0;
 uint32_t phaseStart = 0;
+struct PlantTiming {
+  uint8_t cycles = 5;
+  bool returnToStart = false;
+  uint32_t driveMs = 3000;
+  uint32_t settleMs = 250;
+  uint32_t releaseMs = 800;
+  uint32_t returnPauseMs = 0;
+};
+PlantTiming planting;
+uint8_t cycleNumber = 0;
+uint8_t returnSegment = 0;
+uint32_t doneAt = 0;
+String autopilotState = "idle";
+String travelDirection = "forward";
+bool durationOK(uint32_t value, bool optional=false) {
+  return (optional && value == 0) || (value >= 100 && value <= 20000);
+}
+bool validPlant(const PlantTiming& p) {
+  return p.cycles >= 1 && p.cycles <= 50 && durationOK(p.driveMs) &&
+    durationOK(p.releaseMs) && durationOK(p.settleMs,true) &&
+    durationOK(p.returnPauseMs,true);
+}
+uint32_t phaseLimit() {
+  if (mode != Mode::Plant) return PERIOD_MS;
+  if (phase == "drive" || phase == "returning") return planting.driveMs;
+  if (phase == "settle") return planting.settleMs;
+  if (phase == "release") return planting.releaseMs;
+  if (phase == "returnPause") return planting.returnPauseMs;
+  return 0;
+}
+void nextPlantPhase(const String &next, uint32_t now) {
+  phase=next; phaseStart=now;
+}
+void finishPlant(uint32_t now) {
+  stopMotor(); gate(false);
+  nextPlantPhase("done",now);
+  autopilotState="done"; doneAt=now;
+}
+void startPlant(const PlantTiming& p) {
+  if(!validPlant(p)) return;
+  planting=p; cycleNumber=1; returnSegment=0;
+  enterAuto(Mode::Plant);
+  autopilotState="running"; travelDirection="forward";
+  nextPlantPhase("drive", millis());
+}
 
 void writeMotor(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
   if (!motorReady) return;
@@ -94,6 +139,7 @@ void enterManual() {
   wsDriving = false;
   stopMotor();
   phase = "idle";
+  autopilotState="idle";
 }
 void enterAuto(Mode next) {
   stopMotor();
@@ -102,36 +148,65 @@ void enterAuto(Mode next) {
   phaseStart = millis();
   lastHeartbeat = millis();
   gate(false);
+  autopilotState="running";
 }
 void runAuto(uint32_t now) {
   if (mode == Mode::Manual) return;
+  if(mode == Mode::Plant && phase=="done") {
+    stopMotor();
+    if((uint32_t)(now-doneAt)>10000) enterManual();
+    return;
+  }
   if ((uint32_t)(now - lastHeartbeat) > AUTO_TIMEOUT_MS) {
     enterManual();
     return;
   }
   uint32_t elapsed = now - phaseStart;
+  if (mode == Mode::Plant) {
+    if(phase=="drive") {
+      gate(false);
+      if(elapsed >= 250) drive("go"); else stopMotor();
+      if(elapsed >= planting.driveMs) {
+        stopMotor();
+        nextPlantPhase(planting.settleMs>0 ? "settle" : "release",now);
+      }
+    } else if(phase=="settle") {
+      stopMotor(); gate(false);
+      if(elapsed>=planting.settleMs) nextPlantPhase("release",now);
+    } else if(phase=="release") {
+      stopMotor(); gate(true);
+      if(elapsed>=planting.releaseMs) {
+        gate(false);
+        if(cycleNumber<planting.cycles) {
+          cycleNumber++;
+          nextPlantPhase("drive",now);
+        } else if(planting.returnToStart) {
+          travelDirection="returning"; returnSegment=1;
+          nextPlantPhase("returning",now);
+        } else finishPlant(now);
+      }
+    } else if(phase=="returning") {
+      gate(false); drive("back");
+      if(elapsed>=planting.driveMs) {
+        stopMotor();
+        if(returnSegment>=planting.cycles) finishPlant(now);
+        else if(planting.returnPauseMs>0) nextPlantPhase("returnPause",now);
+        else { returnSegment++; nextPlantPhase("returning",now); }
+      }
+    } else if(phase=="returnPause") {
+      stopMotor(); gate(false);
+      if(elapsed>=planting.returnPauseMs) {
+        returnSegment++; nextPlantPhase("returning",now);
+      }
+    }
+    return;
+  }
   if (elapsed >= PERIOD_MS) {
-    phaseStart = now;
-    phase = phase == "drive" ? "release" : "drive";
+    phaseStart=now;
+    phase=phase=="drive" ? "release" : "drive";
   }
-  if (mode == Mode::Cruise) {
-    // Continuous forward driving; toggle gate on three-second phases.
-    gate(phase == "release");
-    drive("go");
-  } else if (mode == Mode::Pulse) {
-    // Motor pulse test: three seconds forward then three seconds stopped.
-    gate(false);
-    if (phase == "drive") drive("go");
-    else stopMotor();
-  } else if (phase == "drive") {
-    // Plant cycle: gate closed and forward for 3 s; pause before advancing.
-    gate(false);
-    if ((uint32_t)(now - phaseStart) >= 250) drive("go");
-    else stopMotor();
-  } else {
-    stopMotor();
-    gate(true);
-  }
+  if(mode==Mode::Cruise) { gate(phase=="release"); drive("go"); }
+  else if(mode==Mode::Pulse) { gate(false); if(phase=="drive") drive("go"); else stopMotor(); }
 }
 String modeName() {
   switch (mode) {
@@ -228,13 +303,21 @@ String statusJSON() {
   result += ",\"motion\":\"" + motion + "\"";
   result += ",\"phase\":\"" + phase + "\"";
   result += ",\"phaseRemainingMs\":";
-  result += mode == Mode::Manual ? 0 : (int)max(0L, (long)PERIOD_MS - (long)(millis() - phaseStart));
+  uint32_t limit=mode==Mode::Manual ? 0 : phaseLimit();
+  uint32_t spent=(uint32_t)(millis()-phaseStart);
+  result += String(limit>spent ? limit-spent : 0);
   result += ",\"servoEnabled\":";
   result += servoReady ? "true" : "false";
   result += ",\"servo2Enabled\":";
   result += ENABLE_SERVO_2 ? "true" : "false";
   result += ",\"uptimeMs\":" + String(millis());
   result += ",\"resetReason\":\"" + resetCause + "\"";
+  result += ",\"cycle\":" + String(cycleNumber);
+  result += ",\"totalCycles\":" + String(planting.cycles);
+  result += ",\"returnToStart\":";
+  result += planting.returnToStart ? "true" : "false";
+  result += ",\"direction\":\"" + travelDirection + "\"";
+  result += ",\"state\":\"" + autopilotState + "\"";
   result += ",\"preset\":";
   if (mode == Mode::Plant) result += "\"plant\"";
   else if (mode == Mode::Cruise) result += "\"cruise\"";
@@ -268,7 +351,27 @@ void configureRoutes() {
     addCorsHeaders();
     if (!motorReady) { server.send(503, "text/plain", "Motor PWM unavailable"); return; }
     const String requested = server.arg("mode");
-    if (requested == "plant") enterAuto(Mode::Plant);
+    if (requested == "plant") {
+      PlantTiming p;
+      // Old /auto?mode=plant remains supported with safe placeholder defaults.
+      if(server.hasArg("cycles") || server.hasArg("drive")) {
+        if(!server.hasArg("cycles") || !server.hasArg("return") ||
+           !server.hasArg("drive") || !server.hasArg("settle") ||
+           !server.hasArg("release")) {
+          server.send(400,"text/plain","Missing plant settings"); return;
+        }
+        String ret=server.arg("return");
+        if(ret!="0" && ret!="1") {server.send(400,"text/plain","Bad return flag");return;}
+        p.returnToStart=ret=="1";
+        p.cycles=server.arg("cycles").toInt();
+        p.driveMs=server.arg("drive").toInt();
+        p.settleMs=server.arg("settle").toInt();
+        p.releaseMs=server.arg("release").toInt();
+        if(server.hasArg("returnPause")) p.returnPauseMs=server.arg("returnPause").toInt();
+      }
+      if(!validPlant(p)) { server.send(400,"text/plain","Bad plant timing"); return; }
+      startPlant(p);
+    }
     else if (requested == "cruise") enterAuto(Mode::Cruise);
     else if (requested == "pulse") enterAuto(Mode::Pulse);
     else { server.send(400, "text/plain", "Unknown preset"); return; }
@@ -349,7 +452,31 @@ void handleWs(uint8_t num, WStype_t event, uint8_t *data, size_t length) {
     String preset=doc["preset"] | "";
     if (preset=="cruise") enterAuto(Mode::Cruise);
     else if (preset=="pulse") enterAuto(Mode::Pulse);
-    else if (preset=="plant") enterAuto(Mode::Plant);
+    else if (preset=="plant") {
+      PlantTiming p;
+      if(!doc["cycles"].is<int>() || !doc["returnToStart"].is<bool>() ||
+         !doc["driveMs"].is<int>() || !doc["settleMs"].is<int>() ||
+         !doc["releaseMs"].is<int>() || !doc["returnPauseMs"].is<int>()) {
+        webSocket.sendTXT(num,"E:Missing or invalid plant fields"); return;
+      }
+      int cycles=doc["cycles"].as<int>();
+      int driveMs=doc["driveMs"].as<int>();
+      int settleMs=doc["settleMs"].as<int>();
+      int releaseMs=doc["releaseMs"].as<int>();
+      int pause=doc["returnPauseMs"].as<int>();
+      if(cycles<1 || cycles>50 || driveMs<0 || settleMs<0 || releaseMs<0 || pause<0 ||
+         driveMs>20000 || settleMs>20000 || releaseMs>20000 || pause>20000) {
+        webSocket.sendTXT(num,"E:Plant duration out of range"); return;
+      }
+      p.cycles=(uint8_t)cycles;
+      p.driveMs=(uint32_t)driveMs;
+      p.settleMs=(uint32_t)settleMs;
+      p.releaseMs=(uint32_t)releaseMs;
+      p.returnPauseMs=(uint32_t)pause;
+      p.returnToStart=doc["returnToStart"].as<bool>();
+      if(!validPlant(p)) { webSocket.sendTXT(num,"E:Invalid plant settings"); return; }
+      startPlant(p);
+    }
     else { webSocket.sendTXT(num,"E:Unknown preset"); return; }
   } else if (frame=="Q" || frame.startsWith("Q:")) {
     if(frame.startsWith("Q:")) webSocket.sendTXT(num,"ACK:"+frame.substring(2));
