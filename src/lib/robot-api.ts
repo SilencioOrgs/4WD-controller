@@ -1,35 +1,35 @@
-import {
-  ROBOT_HOST, autopilotPath, directionPath, parseRobotStatus, servoPath,
-  type Direction, type Preset, type RobotStatus
-} from "./protocol";
+import { ROBOT_HOST, autopilotPath, directionPath, parseRobotStatus, servoPath,
+  type Direction, type Preset, type RobotStatus } from "./protocol";
+import type { PlantConfig } from "./plant-plan";
 
 export class RobotApi {
   constructor(private readonly host: string = ROBOT_HOST) {}
-
-  private async get(path: string, timeoutMs = 1600): Promise<unknown> {
+  private async get(path: string, timeoutMs = 1600, external?: AbortSignal): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const abort = () => controller.abort();
+    external?.addEventListener("abort", abort, { once: true });
     try {
-      // Plain GET: no extra request headers or preflight, local-only network.
       const response = await fetch(this.host + path, {
         method: "GET", signal: controller.signal, cache: "no-store"
       });
-      if (!response.ok) throw new Error("Robot error " + response.status);
+      if (!response.ok) throw new Error("Robot HTTP " + response.status);
       if (path === "/status") return await response.json();
-      return undefined;
     } finally {
       clearTimeout(timer);
+      external?.removeEventListener("abort", abort);
     }
   }
-
-  async status(): Promise<RobotStatus> {
-    return parseRobotStatus(await this.get("/status"));
-  }
-  drive(direction: Direction) { return this.get(directionPath(direction), 900); }
-  stop() { return this.get("/stop", 1400); }
+  async status(): Promise<RobotStatus> { return parseRobotStatus(await this.get("/status")); }
+  drive(dir: Direction, signal?: AbortSignal) { return this.get(directionPath(dir), 900, signal); }
+  stop() { return this.get("/stop", 900); }
   heartbeat() { return this.get("/heartbeat", 1000); }
-  autopilot(preset: Preset) { return this.get(autopilotPath(preset), 1400); }
-  gate(channel: 1 | 2, state: "open" | "close") {
-    return this.get(servoPath(channel, state), 1400);
+  gate(ch: 1 | 2, pos: "open" | "close") { return this.get(servoPath(ch,pos), 1200); }
+  autopilot(config: PlantConfig | { preset: "cruise" | "pulse" }) {
+    return this.get(config.preset === "plant" ?
+      "/auto?mode=plant&cycles=" + config.cycles + "&return=" + Number(config.returnToStart) +
+       "&drive=" + config.driveMs + "&settle=" + config.settleMs +
+       "&release=" + config.releaseMs + "&returnPause=" + config.returnPauseMs :
+      autopilotPath(config.preset), 1200);
   }
 }

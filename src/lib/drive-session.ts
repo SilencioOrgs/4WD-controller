@@ -1,82 +1,47 @@
 import type { Direction } from "./protocol";
 export type DriveCommand = Direction | "stop";
 
-/**
- * Single-flight, ordered motor requests. Every release queues a stop behind
- * the last in-flight drive response. Refreshes the ESP32 motion watchdog
- * while held, without flooding WebServer with overlapping commands.
- */
+/** WS sends are immediate. For HTTP, transport.abortDrive() ensures the STOP
+ * is dispatched immediately rather than waiting on a timed-out fetch. */
 export class DriveSession {
-  private wanted: Direction | null = null;
-  private lastSent: DriveCommand = "stop";
-  private pending: Promise<void> = Promise.resolve();
-  private busy = false;
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private held: Direction | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
-
-  private readonly send: (command: DriveCommand) => Promise<unknown>;
-  private readonly onError: (error: unknown) => void;
-
-  constructor(
-    send: (command: DriveCommand) => Promise<unknown>,
-    onError: (error: unknown) => void,
-  ) {
-    this.send = send;
-    this.onError = onError;
-  }
-
-  press(direction: Direction) {
+  private last: Promise<unknown> = Promise.resolve();
+  constructor(private readonly send: (command: DriveCommand) => Promise<unknown>,
+              private readonly onError: (error: unknown) => void,
+              private readonly intervalMs = 100) {}
+  press(dir: Direction) {
     if (this.disposed) return;
-    this.wanted = direction;
+    this.held = dir;
     if (this.timer) clearInterval(this.timer);
-    this.timer = setInterval(() => this.pump(true), 250);
-    this.pump(true);
+    this.dispatch(dir);
+    this.timer = setInterval(() => {
+      if (this.held === dir) this.dispatch(dir);
+    }, this.intervalMs);
   }
-
   release() {
     if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-    this.wanted = null;
-    this.pump();
+    this.timer = null;
+    if (this.held === null) return;
+    this.held = null;
+    this.dispatch("stop");
   }
-
-  private pump(refresh = false) {
-    if (this.disposed || this.busy) return;
-    const next: DriveCommand = this.wanted ?? "stop";
-    if (next === this.lastSent && !refresh) return;
-    this.busy = true;
-    this.lastSent = next;
-    // The call starts immediately, on pointer-down, rather than a microtask later.
-    let task: Promise<unknown>;
+  private dispatch(command: DriveCommand) {
+    if (this.disposed) return;
     try {
-      task = this.send(next);
-    } catch (error) {
-      task = Promise.reject(error);
-    }
-    this.pending = Promise.resolve(task)
-      .then(() => undefined)
-      .catch(error => {
-        this.wanted = null;
-        if (this.timer) clearInterval(this.timer);
-        this.timer = undefined;
+      this.last = Promise.resolve(this.send(command)).catch(error => {
+        if (command !== "stop") this.release();
         this.onError(error);
-      })
-      .finally(() => {
-        this.busy = false;
-        if (this.disposed) return;
-        if ((this.wanted ?? "stop") !== next) this.pump();
       });
+    } catch (error) {
+      if (command !== "stop") this.release();
+      this.onError(error);
+    }
   }
-
-  async whenSettled() {
-    // Account for a queued stop after the current request finishes.
-    while (this.busy) await this.pending;
-  }
-
+  async whenSettled() { await this.last; }
   dispose() {
-    this.disposed = true;
+    this.release(); this.disposed = true;
     if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-    this.wanted = null;
   }
 }
