@@ -119,6 +119,7 @@ export function useRobot() {
     heldRef.current=direction;setHeld(direction);void tapFeedback(haptics);
     driveRef.current?.press(direction);
   };
+  const selectAutoView=()=>{ release(); setView("auto"); };
   const chooseManual=()=>{
     setView("manual");
     if(modeRef.current==="auto")void stop();
@@ -145,7 +146,7 @@ export function useRobot() {
   const toggleDebug=()=>{const next=!debug;setDebug(next);localStorage.setItem("fourwd-debug",String(next));};
   const toggleServo2=()=>{const next=!servo2Visible;setServo2Visible(next);localStorage.setItem("fourwd-servo2",String(next));};
   const editPlant=(patch:Partial<PlantPreset>)=>setPlants(old=>old.map(p=>p.id===plantId?{...p,...patch}:p));
-  return {status,health,connected,view,setView,chooseManual,routine,setRoutine,held,drive,release,stop,run,gate,
+  return {status,health,connected,view,setView,selectAutoView,chooseManual,routine,setRoutine,held,drive,release,stop,run,gate,
     haptics,debug,settingsOpen,setSettingsOpen,servo2Visible,toggleHaptics,toggleDebug,toggleServo2,
     retry,powerWarning,runningCommand,plants,plantId,setPlantId,selectedPlant,editPlant,
     cycles,setCycles,returnToStart,setReturnToStart,speed,setSpeed,configuration,configurationError,error,

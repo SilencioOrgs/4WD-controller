@@ -8,7 +8,7 @@ export function ModePanel({robot:r}:{robot:ReturnTypeUseRobot}) {
      <button type="button" className={r.view==="manual"?"selected":""}
        onClick={r.chooseManual}><Gauge size={17}/>Manual</button>
      <button type="button" className={r.view==="auto"?"selected":""}
-       onClick={()=>r.setView("auto")}><Activity size={17}/>Autopilot</button>
+       onClick={r.selectAutoView}><Activity size={17}/>Autopilot</button>
    </div>
    {r.view==="manual"?<div className="mode-main">
      <div><div className="section-kicker">Manual control</div>

@@ -25,7 +25,7 @@ test("fullscreen responsive interface uses large touch targets and no PSP shell"
 });
 
 test("autopilot opens configuration without dispatching movement", () => {
-  assert.match(modePanel, /onClick=\{\(\)=>r\.setView\("auto"\)\}/);
+  assert.match(modePanel, /onClick=\{r\.selectAutoView\}/);
   assert.match(modePanel, /START AUTOPILOT/);
 });
 
