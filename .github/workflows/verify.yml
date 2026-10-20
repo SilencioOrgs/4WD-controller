@@ -19,3 +19,10 @@ jobs:
         run: npm run test
       - name: TypeScript and Next.js static export
         run: npm run build
+      - name: Generate Capacitor Android project
+        run: npm run cap:add:android
+      - name: Check native Android permissions and orientation
+        run: |
+          grep -q 'screenOrientation="landscape"' android/app/src/main/AndroidManifest.xml
+          grep -q 'usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.INTERNET' android/app/src/main/AndroidManifest.xml
