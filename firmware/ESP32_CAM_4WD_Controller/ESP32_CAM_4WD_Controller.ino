@@ -35,6 +35,22 @@ static const bool ENABLE_SERVO_2 = false;
 static const ledc_channel_t servoChannels[2] = {LEDC_CHANNEL_2, LEDC_CHANNEL_3};
 static const int SERVO_OPEN_DEGREES = 0;
 static const int SERVO_CLOSED_DEGREES = 90;
+// ---- Continuous-rotation (360 deg) servo as the seed gate (servo 1 only) ----
+// SERVO_CONTINUOUS = true: servo 1 has no position feedback, so the gate is moved
+// by spinning for a calibrated TIME. The firmware assumes the gate is CLOSED when
+// the robot powers on (power up with the gate closed).
+// SERVO_CONTINUOUS = false: normal 180 deg positional servo (angles above).
+// Servo 2 (rake) always stays a normal positional servo.
+static const bool SERVO_CONTINUOUS = true;
+// Copy these from Servo_360_As_180.ino (status command):
+//   GATE_STOP_US   = "stop" value that stops creeping (about 1500)
+//   GATE_SPIN_US   = "speed" value (distance from stop, 50..500)
+//   GATE_TRAVEL_MS = travel180 * |closed - open| / 180   (time to go closed -> open)
+static const int      GATE_STOP_US = 1500;
+static const int      GATE_SPIN_US = 300;
+static const uint32_t GATE_TRAVEL_MS = 500;
+// true: opening = clockwise (pulse below stop). Set false if your hopper opens the other way.
+static const bool     GATE_OPEN_IS_CW = false;
 
 WebServer server(80);
 WebSocketsServer webSocket(81);
@@ -70,7 +86,8 @@ uint8_t cycleNumber = 0;
 uint8_t returnSegment = 0;
 uint8_t seedDrops = 0;
 static const uint32_t RAKE_LOWER_WAIT_MS = 150;
-static const uint32_t GATE_CLOSE_WAIT_MS = 220; // Allow MG90S gate to reach closed position before wheels move.
+// Wait for the gate to reach closed before wheels move (continuous servo needs its full travel time).
+static const uint32_t GATE_CLOSE_WAIT_MS = (SERVO_CONTINUOUS && GATE_TRAVEL_MS > 220) ? GATE_TRAVEL_MS : 220;
 // Adjust only after servo 2 has its own safe signal output and mechanical calibration.
 static const int RAKE_UP_DEGREES = 0;
 static const int RAKE_DOWN_DEGREES = 90;
@@ -141,20 +158,58 @@ void drive(const String& direction) {
   } else { stopMotor(); }
 }
 int lastServoAngle[2]={-1,-1};
+void writeServoPulse(int index, uint32_t pulseUs) {
+  // 50Hz 16-bit PWM. pulseUs = 0 stops sending pulses (servo idles, no creeping).
+  uint32_t duty = (uint32_t)((uint64_t)pulseUs * 65535 / 20000);
+  ledc_set_duty(LEDC_LOW_SPEED_MODE, servoChannels[index], duty);
+  ledc_update_duty(LEDC_LOW_SPEED_MODE, servoChannels[index]);
+}
 void writeServo(int index, int angle) {
   if (!servoReady || index < 0 || index > 1 || (index == 1 && !ENABLE_SERVO_2)) return;
   angle = constrain(angle, 0, 180);
   if(lastServoAngle[index] == angle) return;
   lastServoAngle[index] = angle;
-  // 50Hz 16-bit PWM: 500–2500 microseconds.
-  uint32_t pulseUs = 500 + (uint32_t)angle * 2000 / 180;
-  uint32_t duty = (uint32_t)((uint64_t)pulseUs * 65535 / 20000);
-  ledc_set_duty(LEDC_LOW_SPEED_MODE, servoChannels[index], duty);
-  ledc_update_duty(LEDC_LOW_SPEED_MODE, servoChannels[index]);
+  // 500-2500 microseconds.
+  writeServoPulse(index, 500 + (uint32_t)angle * 2000 / 180);
+}
+// Continuous servo gate (servo 1): estimated position in ms, 0 = closed, GATE_TRAVEL_MS = open.
+int32_t  gatePosMs = 0;
+int32_t  gateTargetMs = 0;
+uint32_t gateLastTick = 0;
+int      gateLastPulse = -1;
+void setGatePulse(int pulseUs) {
+  if (gateLastPulse == pulseUs) return;
+  gateLastPulse = pulseUs;
+  writeServoPulse(0, (uint32_t)pulseUs);
+}
+// Call every loop(). Spins the gate toward its target for the right amount of time.
+void gateTick(uint32_t now) {
+  if (!SERVO_CONTINUOUS || !servoReady) return;
+  int32_t dt = (int32_t)(now - gateLastTick);
+  gateLastTick = now;
+  if (gatePosMs == gateTargetMs) { setGatePulse(0); return; }
+  const bool opening = gateTargetMs > gatePosMs;
+  const bool clockwise = opening ? GATE_OPEN_IS_CW : !GATE_OPEN_IS_CW;
+  setGatePulse(clockwise ? GATE_STOP_US - GATE_SPIN_US : GATE_STOP_US + GATE_SPIN_US);
+  if (dt > 50) dt = 50;           // ignore long loop stalls
+  if (opening) {
+    gatePosMs += dt;
+    if (gatePosMs >= gateTargetMs) { gatePosMs = gateTargetMs; setGatePulse(0); }
+  } else {
+    gatePosMs -= dt;
+    if (gatePosMs <= gateTargetMs) { gatePosMs = gateTargetMs; setGatePulse(0); }
+  }
 }
 void gate(bool open, int index) {
+  if (index < 0 || index > 1) return;
+  if (SERVO_CONTINUOUS && index == 0) {
+    if (!servoReady) return;
+    gateTargetMs = open ? (int32_t)GATE_TRAVEL_MS : 0;
+    return;
+  }
   writeServo(index, open ? SERVO_OPEN_DEGREES : SERVO_CLOSED_DEGREES);
 }
+
 void rake(bool down) {
   if (!ENABLE_SERVO_2) return;
   writeServo(1, down ? RAKE_DOWN_DEGREES : RAKE_UP_DEGREES);
@@ -585,6 +640,7 @@ void loop() {
   webSocket.loop();
   server.handleClient();
   uint32_t now = millis();
+  gateTick(now);
   if (mode != Mode::Manual) runAuto(now);
   else if (motion != "stop" && (uint32_t)(now - lastMove) > (wsDriving ? WS_MOTION_TIMEOUT_MS : MOTION_TIMEOUT_MS)) stopMotor();
   if (controllerClient != 255) {
