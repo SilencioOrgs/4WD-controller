@@ -58,6 +58,82 @@ The Android project is **generated** and intentionally excluded from Git. The pr
 
 Connect your phone to **ESP32-CAM Robot** Wi-Fi (SSID); Android may show **Connected without Internet**. Stay on the network. If commands cannot connect, temporarily disable mobile data and Android "switch to mobile data"/network-assist so traffic stays on the no-internet ESP32 AP.
 
+## Continuous-rotation servo gate (Servo 1 / GPIO2)
+
+The mounted **360° continuous-rotation seed-gate servo is not positional**: a PWM
+value makes it rotate continuously, rather than move to that angle. Firmware
+sets `SERVO_CONTINUOUS = true` so opening/closing uses a **timed movement**
+instead. Setting `SERVO_CONTINUOUS = false` restores the existing
+`SERVO_OPEN_DEGREES` / `SERVO_CLOSED_DEGREES` positional behavior for a
+normal 180° servo. **Servo 2 (future seed-covering rake) always uses the
+original positional `writeServo(1, angle)` path**, and remains disabled on
+GPIO4 to keep the ESP32-CAM flash LED LOW.
+
+**Before every power-up, manually put the gate fully CLOSED.** The software
+initializes its estimated position to closed (zero) and will not home it or
+detect its true position. No encoder or limit switch provides feedback:
+skipped motion, wheel vibration, a stall, a long loop stall or a reboot can
+make the estimate drift. A *suitably engineered, non-damaging* closed-end
+physical stop provides a reference, but a continuous servo can keep
+pushing against a stop until its timed command ends. Avoid prolonged
+stalls; verify the mounting and calibration without seeds first.
+
+### Calibrate in the Arduino firmware
+
+Constants are near `SERVO_CLOSED_DEGREES` in
+`firmware/ESP32_CAM_4WD_Controller/ESP32_CAM_4WD_Controller.ino`:
+
+| Constant | Initial value | Calibration |
+| --- | --- | --- |
+| `SERVO_CONTINUOUS` | `true` | Enable timed control for the 360° gate; `false` for a normal positional gate. |
+| `GATE_STOP_US` | `1500` | Approximate neutral pulse in microseconds. With calibration tools, find the value at which the servo does not creep. |
+| `GATE_SPIN_US` | `300` | Offset from neutral, typically 50–500 µs. It affects rotation speed. |
+| `GATE_TRAVEL_MS` | `500` | Measured travel time to move from fully closed to fully open. |
+| `GATE_OPEN_IS_CW` | `false` | Opening uses counter-clockwise rotation (pulse above neutral). Flip to `true` if your physical mechanism opens clockwise. |
+
+If using a timed-servo calibration sketch with `travel180` and the
+positional angles, compute:
+
+```text
+GATE_TRAVEL_MS = travel180 * abs(SERVO_CLOSED_DEGREES - SERVO_OPEN_DEGREES) / 180
+```
+
+Measure the real gate opening on your mounted mechanism; the formula is a
+starting estimate, **not positional feedback**. With the committed values,
+an opening command uses `1800 µs`, and closing uses `1200 µs`. At the
+target estimate the servo PWM duty is set to **zero** (no repeated pulses)
+so it stops receiving a rotation command. Depending on servo electronics,
+lack of pulses may let the mechanism freewheel, so check that the gate
+remains physically closed.
+
+**Plant Cycle's "Keep seed gate open" / Gate release duration must be at
+least `GATE_TRAVEL_MS` plus the required seed-fall time.** For example,
+with `GATE_TRAVEL_MS = 500` and a release setting of `800 ms`, the
+nominal time fully open is only about 300 ms. The firmware waits at least
+`GATE_TRAVEL_MS` after commanding close, before driving again. The
+app-side `220 ms` plan marker is just a progress estimate and can be
+slightly shorter than the actual firmware phase; it does not control the
+servo.
+
+### Power and safe bench testing
+
+Power the gate servo from its **own suitable regulated 5 V supply**
+(or a dedicated, adequately rated 5 V servo rail) with **common ground**
+to the ESP32-CAM and motor driver. **Do not supply servo power from
+the L298N on-board regulator or the ESP32-CAM 5 V pin.** Servo peak
+currents and motor startup surges can cause brownouts.
+
+With the **wheels raised**, power on with the gate mechanically CLOSED.
+First test open and close without a full seed load, watch that it rotates
+in the correct direction and stops, and verify that the physical travel
+matches `GATE_TRAVEL_MS`. If opening goes the wrong way, **power down**
+before changing `GATE_OPEN_IS_CW` and reflash. Confirm that STOP, app
+backgrounding and lost Wi-Fi request closing, and that return movement
+never begins before the gate finishes its estimated closure. Repeat for
+the mounted hopper only after a low-load bench test. If it stalls against
+the physical stop, shorten or recalibrate the travel time. There is no
+automatic homing or fault detection.
+
 ## Seed dispensing — easy setup (October 2026)
 
 The Plant Cycle editor now leads with four questions: **Select plant**, **Dispense first / Move first**, **Forward moves**, and **Stop there / Go back**. It shows a readable route summary. Advanced fields are optional and displayed in **seconds**, not milliseconds.
