@@ -1,4 +1,10 @@
 export type SeedSequence = "dispense-first" | "move-first";
+// UI-only plan estimate. The firmware actually waits GATE_CLOSE_WAIT_MS,
+// which is at least GATE_TRAVEL_MS for a continuous servo; progress may show
+// the next phase slightly earlier than the physical gate finishes closing.
+// This is intentionally NOT sent to the robot and does not alter motion timing.
+export const PLANT_PLAN_GATE_CLOSE_ESTIMATE_MS = 220;
+
 export type PlantConfig = {
   preset: "plant";
   cycles: number;
@@ -49,14 +55,14 @@ export function buildPlantPlan(config: PlantConfig): PlantSegment[] {
   const add = (phase: PlantPhase, cycle: number, durationMs: number, direction: "forward" | "returning" = "forward") =>
     plan.push({ phase, cycle, durationMs, direction });
 
-  if (sequence === "dispense-first") { add("release", 0, config.releaseMs); add("gateClose",0,220); }
+  if (sequence === "dispense-first") { add("release", 0, config.releaseMs); add("gateClose",0,PLANT_PLAN_GATE_CLOSE_ESTIMATE_MS); }
   for (let cycle = 1; cycle <= config.cycles; cycle++) {
     if (rake && (sequence==="dispense-first" || cycle>1)) add("rakeDown", cycle, 150);
     add("drive", cycle, config.driveMs);
     if (rake && (sequence==="dispense-first" || cycle>1)) add("rakeUp", cycle, 0); // marker: lift occurs DURING the drive, at rakeLiftMs
     if (config.settleMs > 0) add("settle", cycle, config.settleMs);
     add("release", cycle, config.releaseMs);
-    add("gateClose", cycle, 220);
+    add("gateClose", cycle, PLANT_PLAN_GATE_CLOSE_ESTIMATE_MS);
   }
   if (config.returnToStart) {
     for (let segment = 1; segment <= config.cycles; segment++) {
